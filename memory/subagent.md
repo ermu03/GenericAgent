@@ -5,6 +5,7 @@
 - 目录：`temp/{task_name}/`（cwd在temp/时即`./{task_name}/`）
 - 启动：`python agentmain.py --task {name} [--input "短文本"] [--bg] [--llm_no N]`（cwd=代码根）
 - `--input`自动建目录+清旧output+写input.txt；长文本先手动写input.txt再启动(不带--input)
+- **已验证坑点**：若采用“手工预写 `input.txt` + `python agentmain.py --task {name} --bg`”启动，`context.json` **不会自动生成**；需要主agent先在task_dir写好 `context.json`，否则subagent常因cwd在`temp/`而退回相对路径读文件、容易偏航
 - 优先用`--bg`后台(print PID exit)，可同一code_run内sleep后poll；非--bg禁合并启动+轮询
 - subagent的cwd还是temp，不是task目录
 - input：目标+约束即可，subagent同等智能。**禁写步骤/过度描述**，大量数据给路径
