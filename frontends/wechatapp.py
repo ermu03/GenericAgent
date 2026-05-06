@@ -3,8 +3,13 @@ from pathlib import Path
 from urllib.parse import quote
 import requests, qrcode
 from Crypto.Cipher import AES
+
+# 把项目根目录加入 Python 搜索路径 -> from agentmain import GeneraticAgent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+#指向 GenericAgent/temp，后面微信收到的文件、Agent 生成的文件都主要放这里
 _TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'temp')
+
 from agentmain import GeneraticAgent
 
 # ── WxBotClient (inline from wx_bot_client.py) ──
@@ -23,6 +28,17 @@ CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
 def _uin():
     return base64.b64encode(str(struct.unpack('>I', os.urandom(4))[0]).encode()).decode()
 
+"""
+WxBotClient 是微信 API 封装
+    _load() / _save()：从 ~/.wxbot/token.json 读写登录 token。
+    _post()：统一向 https://ilinkai.weixin.qq.com 发请求。
+    login_qr()：没有 token 时生成二维码，让用户扫码登录。
+    get_updates()：长轮询拉取微信新消息。
+    send_text()：发文本消息。
+    send_typing()：告诉微信“机器人正在输入”。
+    send_file() / send_image() / send_video()：发送文件、图片、视频。
+    run_loop(on_message)：持续监听微信消息，收到后调用外部传入的 on_message
+"""
 class WxBotClient:
     def __init__(self, token=None, token_file=None):
         self._tf = Path(token_file) if token_file else TOKEN_FILE
@@ -37,6 +53,7 @@ class WxBotClient:
             self.token, self.bot_id, self._buf = d.get('bot_token',''), d.get('ilink_bot_id',''), d.get('updates_buf','')
 
     def _save(self, **kw):
+        """将 token、id、buf、login_time 保存到 .wxbot/token.json"""
         d = {'bot_token': self.token or '', 'ilink_bot_id': self.bot_id or '',
              'updates_buf': self._buf or '', **kw}
         self._tf.write_text(json.dumps(d, ensure_ascii=False, indent=2), 'utf-8')
@@ -55,6 +72,7 @@ class WxBotClient:
         return r.json()
 
     def login_qr(self, poll_interval=2):
+        """没有 token 时生成二维码，让用户扫码登录"""
         r = requests.get(f'{API}/ilink/bot/get_bot_qrcode', params={'bot_type': 3}, headers={'User-Agent': UA}, timeout=10)
         r.raise_for_status()
         d = r.json()
@@ -66,10 +84,16 @@ class WxBotClient:
             qr = qrcode.QRCode(border=1); qr.add_data(url); qr.make(fit=True); qr.print_ascii(invert=True)
         last = ''
         while True:
-            time.sleep(poll_interval)
-            try: s = requests.get(f'{API}/ilink/bot/get_qrcode_status', params={'qrcode': qr_id}, headers={'User-Agent': UA}, timeout=60).json()
+            time.sleep(poll_interval) # 轮询 2 秒
+            try: s = requests.get(
+                f'{API}/ilink/bot/get_qrcode_status', 
+                params={'qrcode': qr_id}, 
+                headers={'User-Agent': UA}, 
+                timeout=60
+                ).json()
             except requests.exceptions.ReadTimeout: continue
             st = s.get('status', '')
+            # 打印状态（重复不打印）
             if st != last: print(f'  状态: {st}'); last = st
             if st == 'confirmed':
                 self.token, self.bot_id = s.get('bot_token', ''), s.get('ilink_bot_id', '')
@@ -79,6 +103,7 @@ class WxBotClient:
             if st == 'expired': raise RuntimeError('二维码过期')
 
     def get_updates(self, timeout=30):
+        """长轮询拉取微信新消息"""
         try:
             resp = self._post('ilink/bot/getupdates',
                               {'get_updates_buf': self._buf or '',
@@ -95,6 +120,7 @@ class WxBotClient:
         return resp.get('msgs') or []
 
     def send_text(self, to_user_id, text, context_token=''):
+        """发文本消息"""
         msg = {'from_user_id': '', 'to_user_id': to_user_id,
                'client_id': f'pyclient-{uuid.uuid4().hex[:16]}',
                'message_type': MSG_BOT, 'message_state': STATE_FINISH,
@@ -103,12 +129,17 @@ class WxBotClient:
         return self._post('ilink/bot/sendmessage', {'msg': msg, 'base_info': {'channel_version': VER}})
 
     def send_typing(self, to_user_id, typing_ticket='', cancel=False):
+        """ 告诉微信 “机器人正在输入” """
         return self._post('ilink/bot/sendtyping', {
             'ilink_user_id': to_user_id, 'typing_ticket': typing_ticket,
             'status': 2 if cancel else 1,
             'base_info': {'channel_version': VER}})
 
     def _enc(self, raw, aes_key):
+        """
+        AES-ECB 模式的加密函数，作用是：对原始二进制数据进行 AES 对称加密
+        """
+        
         pad = 16 - (len(raw) % 16)
         return AES.new(aes_key, AES.MODE_ECB).encrypt(raw + bytes([pad] * pad))
 
@@ -212,6 +243,7 @@ class WxBotClient:
     def is_user_msg(msg): return msg.get('message_type') == MSG_USER
 
     def run_loop(self, on_message, poll_timeout=30):
+        """持续监听微信消息，收到后调用外部传入的 on_message"""
         print(f'[Bot] 监听中... (bot_id={self.bot_id})')
         seen = set()
         while True:
@@ -230,7 +262,10 @@ class WxBotClient:
 _MEDIA_KEYS = {'image_item': '.jpg', 'video_item': '.mp4', 'file_item': '', 'voice_item': '.silk'}
 
 def _dl_media(items):
-    """Download & decrypt all media items → list of local file paths."""
+    """
+    Download & decrypt all media items → list of local file paths.
+    把消息里的媒体资源（图片/语音/视频等）从 CDN 拉下来并解密成可用文件
+    """
     paths = []
     for item in items:
         for key, ext in _MEDIA_KEYS.items():
@@ -286,6 +321,15 @@ def _strip_md(t):
     return re.sub(r'\n{3,}', '\n\n', t).strip()
 
 def _clean(t):
+    """发微信前清理 Agent 内部标签
+        LLM Running (Turn N) ...
+        工具调用展示行
+        <thinking>...</thinking>
+        <tool_use>...</tool_use>
+        <file_content>...</file_content>
+        <summary> 标签
+    """
+    
     t = re.sub(r'^\s*LLM Running \(Turn \d+\) \.{3}\s*$', '', t, flags=re.M)
     t = re.sub(r'^\s*🛠️\s*[A-Za-z_][A-Za-z0-9_]*\(.*$', '', t, flags=re.M)
     for p in _TAG_PATS:
@@ -293,31 +337,70 @@ def _clean(t):
     t = re.sub(r'</?summary>', '', t)
     return re.sub(r'\n{3,}', '\n\n', _strip_md(t)).strip()
 
+"""
+input: 输入文本 t
+系统初始化完成
+**LLM Running (Turn 1)...**
+回答第一轮问题
+**LLM Running (Turn 2)...**
+回答第二轮问题
+**LLM Running (Turn 3)...**
+正在回答第三轮
+
+output:
+(
+    [
+        "系统初始化完成\n",          # 前缀
+        "**LLM Running (Turn 1)...**\n回答第一轮问题\n",  # 完整轮1
+        "**LLM Running (Turn 2)...**\n回答第二轮问题\n"   # 完整轮2
+    ],
+    "**LLM Running (Turn 3)...**\n正在回答第三轮"        # 最后一轮（未完成）
+)
+"""
 def _turn_parts(t):
-    _ph = []
-    safe = re.sub(r'`{4,}.*?`{4,}', lambda m: (_ph.append(m.group(0)), f'\x00PH{len(_ph)-1}\x00')[1], t, flags=re.DOTALL)
+    """文本解析工具函数，
+    核心作用是：从一段文本中，
+    按固定标记 LLM Running (Turn 数字) ... 分割文本，提取出多轮对话 / 执行片段，
+    同时安全保护长代码块不被错误分割。
+    """
+    _ph = [] # 初始化占位符列表，临时存储被保护的长代码块，防止分割时被破坏
+    # 匹配 代码块 这类长文本
+    safe = re.sub(
+        r'`{4,}.*?`{4,}', 
+        lambda m: (
+            _ph.append(m.group(0)),  # 把完整代码块存入列表
+            f'\x00PH{len(_ph)-1}\x00')[1],  # 生成占位符：\x00PH数字\x00
+        t, 
+        flags=re.DOTALL
+        )
+    # 按 LLM 轮次标记分割文本
     parts = re.split(r'(\**LLM Running \(Turn \d+\) \.\.\.\**)', safe)
+    # 还原占位符（把代码块放回去）
     parts = [re.sub(r'\x00PH(\d+)\x00', lambda m: _ph[int(m.group(1))], p) for p in parts]
     if len(parts) < 4: return [], t
+    # 组合每一轮的完整内容
     turns = [parts[i] + (parts[i+1] if i+1 < len(parts) else '') for i in range(1, len(parts), 2)]
+    # 返回 （前缀 + 完整轮次列表，最后一个轮次）
     return (([parts[0]] if parts[0].strip() else []) + turns[:-1], turns[-1])
 
 def on_message(bot, msg):
-    text = bot.extract_text(msg).strip()
-    uid = msg.get('from_user_id', '')
-    ctx = msg.get('context_token', '')
+    # 提取文本和文件
+    text = bot.extract_text(msg).strip() # 用户发来的文字
+    uid = msg.get('from_user_id', '') # 微信用户 ID，回复时要发给这个人
+    ctx = msg.get('context_token', '') # 微信上下文 token，用于保持消息上下文
+    # 如果用户发了图片/文件/视频，就下载到本地，返回本地路径
     media_paths = _dl_media(msg.get('item_list', []))
     if not text and not media_paths: return
-    if media_paths:
+    if media_paths: # 把文件路径拼进 prompt: [用户发送文件：/path/to/file]
         text = (text + '\n' if text else '') + '\n'.join(f'[用户发送文件: {p}]' for p in media_paths)
     print(f'[WX] 收到: {text[:80]}', file=sys.__stdout__)
 
     # Commands
-    if text in ('/stop', '/abort'):
+    if text in ('/stop', '/abort'): # 调用 agent.abort() 停止当前任务
         agent.abort()
         bot.send_text(uid, '已停止', context_token=ctx)
         return
-    if text.startswith('/llm'):
+    if text.startswith('/llm'): # /llm 或 /llm N：查看或切换当前 LLM
         args = text.split()
         if len(args) > 1:
             try:
@@ -331,7 +414,16 @@ def on_message(bot, msg):
         return
 
     def _handle():
+        # 如果不是 / 开头，就给用户原文前面加一段提示：如果需要给用户展示文件，在回复里使用 [FILE:filepath]
         prompt = text if text.startswith('/') else f"If you need to show files to user, use [FILE:filepath] in your response.\n\n{text}"
+
+        """ 把任务塞进 Agent 的任务队列
+        
+        put_task() 会返回一个 dq，这是一个 Queue。后面微信线程就靠读这个 dq 获取 Agent 输出
+        
+        微信线程  ->  agent.put_task()  ->  Agent 后台线程处理
+        微信线程  <-  dq.get()          <-  Agent 把结果写回队列
+        """
         dq = agent.put_task(prompt, source="wechat")
         try: bot.send_typing(uid)
         except: pass
@@ -345,10 +437,16 @@ def on_message(bot, msg):
             except Exception as e:
                 print(f'[WX] send err len={len(s)} dt={time.time()-t0:.1f}s {type(e).__name__}: {e}', file=sys.__stdout__)
                 return False
-        def _send(show):
+        def _send(show): # 控制中间消息发送频率
+            """
+            最多发送 9 条中间消息
+            每条最多 2000 字
+            发得越多，后面间隔越长：6 * mi 秒
+            """
+            
             nonlocal mi, last_send
             now = time.time()
-            if mi >= 9 or not show.strip(): return False
+            if mi >= 9 or not show.strip(): return False 
             if mi and now - last_send < 6 * mi: return None
             if _wx_send(show[:2000]): mi += 1; last_send = time.time(); return True
             return False
@@ -357,16 +455,22 @@ def on_message(bot, msg):
                 item = dq.get(timeout=300)
                 if 'done' in item: result = item['done']; break
                 raw = item.get('next', '')
+                # 用 _turn_parts() 判断哪些 turn 已经完整结束,
+                # 完整结束的 turn 放进 done；当前还在流式生成的最后一段放进 partial
                 done, partial = _turn_parts(raw)
                 if len(done) > sent:
-                    merged = _clean('\n\n'.join(done[sent:]))
+                    merged = _clean('\n\n'.join(done[sent:])) # 发微信前清理 Agent 内部标签
                     print(f'[WX] turns={len(done)}/{len(done)+1} sent={sent} sending={len(done)-sent}', file=sys.__stdout__)
                     if _send(merged):
                         sent = len(done)
         except queue.Empty: result = '[超时]'
+        
+        # 最终结果发送
         done, partial = _turn_parts(result)
         rest = '\n\n'.join(done[sent:] + [partial] + ['\n\n[任务已完成]'])
-        if rest.strip(): _wx_send((_clean(rest))[-2000:])
+        if rest.strip(): _wx_send((_clean(rest))[-2000:]) # 只取最后 2000 字发微信，避免超长消息发送失败
+        
+        # 如果 Agent 生成了文件
         files = re.findall(r'\[FILE:([^\]]+)\]', result)
         bad = {'filepath', '<filepath>', 'path', '<path>', 'file_path', '<file_path>', '...'}
         files = [f for f in files if f.strip().lower() not in bad and (f if os.path.isabs(f) else os.path.join(_TEMP_DIR, f)) not in media_paths]
@@ -380,20 +484,29 @@ def on_message(bot, msg):
                 sender(uid, fpath, context_token=ctx)
                 print(f'[WX] sent media: {fpath}', file=sys.__stdout__)
             except Exception as e: print(f'[WX] send media err: {e}', file=sys.__stdout__)
-
+            
+    # on_message() 是微信收消息回调，如果在里面阻塞等待 Agent，微信轮询就会卡住。
+    # 所以它开一个后台线程处理这条请求。
     threading.Thread(target=_handle, daemon=True).start()
 
 if __name__ == '__main__':
     try: _lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM); _lock.bind(('127.0.0.1', 19531))
     except OSError: print('[WeChat] Another instance running, exiting.'); sys.exit(1)
+    
+    # 把日志写到 temp/wechatapp.log
     _logf = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'temp', 'wechatapp.log'), 'a', encoding='utf-8', buffering=1)
     sys.stdout = sys.stderr = _logf
     print(f'[NEW] Process starting {time.strftime("%m-%d %H:%M")}')
     bot = WxBotClient()
+    
+    # 如果没有 token，走二维码登录
     if not bot.token:
         sys.stdout = sys.stderr = sys.__stdout__  # restore for QR display
         bot.login_qr()
         sys.stdout = sys.stderr = _logf
+        
+    # 启动 agent.run() 后台线程
     threading.Thread(target=agent.run, daemon=True).start()
     print(f'WeChat Bot 已启动 (bot_id={bot.bot_id})', file=sys.__stdout__)
+    # 调用 bot.run_loop(on_message) 开始监听微信
     bot.run_loop(on_message)

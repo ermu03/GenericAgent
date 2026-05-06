@@ -39,7 +39,17 @@ def get_pretty_json(data):
         data = data.copy(); data["script"] = data["script"].replace("; ", ";\n  ")
     return json.dumps(data, indent=2, ensure_ascii=False).replace('\\n', '\n')
 
-def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, max_turns=40, verbose=True, initial_user_content=None):
+def agent_runner_loop(
+        client, 
+        system_prompt, 
+        user_input, 
+        handler, 
+        tools_schema, 
+        max_turns=40, 
+        verbose=True, 
+        initial_user_content=None
+        ):
+    """做 “LLM 响应 -> 解析工具调用 -> handler 执行 -> 工具结果回灌"""
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": initial_user_content if initial_user_content is not None else user_input}

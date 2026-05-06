@@ -40,6 +40,7 @@ def get_system_prompt():
     return prompt
 
 class GeneraticAgent:
+    """GeneraticAgent 负责加载 key、选择 LLM、维护任务队列、组装系统提示词并启动 loop"""
     def __init__(self):
         os.makedirs(os.path.join(script_dir, 'temp'), exist_ok=True)
         self.lock = threading.Lock()
