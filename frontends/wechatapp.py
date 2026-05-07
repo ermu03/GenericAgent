@@ -28,11 +28,20 @@ ILINK_APP_CLIENT_VERSION = (2 << 16) | (1 << 8) | 10  # 把版本号 2.1.10 编�
 UA = f'openclaw-weixin/{VER}'
 ITEM_IMAGE, ITEM_FILE, ITEM_VIDEO = 2, 4, 5
 CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
+WECHAT_TEXT_CHUNK_SIZE = 5000
 
 def _uin():
     """生成一个“随机整数”的 Base64 字符串表示。"""
     raw = str(struct.unpack('>I', os.urandom(4))[0]).encode()
     return base64.b64encode(raw).decode()
+
+
+def _split_text(text, limit=WECHAT_TEXT_CHUNK_SIZE):
+    """按固定长度分片发送，避免单条过长，但不丢弃任何内容。"""
+    text = (text or '').strip()
+    if not text:
+        return []
+    return [text[i:i + limit] for i in range(0, len(text), limit)]
 
 
 class WxBotClient:
@@ -355,8 +364,8 @@ class WxBotClient:
                     if not self.is_user_msg(msg) or mid in seen:
                         continue
                     seen.add(mid)
-                    if len(seen) > 5000:
-                        seen = set(list(seen)[-2000:])
+                    if len(seen) > 1000:
+                        seen = set(list(seen)[-500:])
                     try:
                         on_message(self, msg)
                     except Exception as e:
@@ -423,23 +432,14 @@ def _strip_md(t):
     WeChat natively renders: code fences, inline code, bold, italic,
     H1-H4 headings, horizontal rules, tables. We only strip unsupported syntax.
     保留：短代码块、行内代码、加粗、斜体、H1-H4、表格、分割线
-    截断：超过 10 行的代码块
+    保留：完整代码块
     删除：Markdown 图片
     转换：链接只保留文字
     转换：无序列表改成 •
     清理：H5/H6 标题符号、有序列表编号、引用符号、多余空行
     """
     def _trunc_code(m):
-        full = m.group()
-        fence = re.match(r'`{3,}', full).group()
-        rest = full[len(fence):-len(fence)]
-        if '\n' not in rest:
-            return full  # single-line, keep as-is
-        lang_line, _, body = rest.partition('\n')
-        lines = body.split('\n')
-        if len(lines) > 10:
-            return f'{fence}{lang_line}\n' + '\n'.join(lines[:10]) + '\n...\n' + fence
-        return full  # keep intact
+        return m.group()
     t = re.sub(r'(`{3,})[\s\S]*?\1', _trunc_code, t)
     # inline code: keep (WeChat renders it)
     # bold/italic (*/**/***): keep (WeChat renders it)
@@ -575,26 +575,31 @@ def on_message(bot, msg):
         def _wx_send(text):
             """真正发微信文本"""
             s = text.strip()
-            t0 = time.time()
-            try:
-                bot.send_text(uid, s, context_token=ctx)
-                print(
-                    f'[WX] send ok len={len(s)} dt={time.time()-t0:.1f}s',
-                    file=sys.__stdout__,
-                )
-                return True
-            except Exception as e:
-                print(
-                    f'[WX] send err len={len(s)} dt={time.time()-t0:.1f}s '
-                    f'{type(e).__name__}: {e}',
-                    file=sys.__stdout__,
-                )
+            parts = _split_text(s)
+            if not parts:
                 return False
+            for i, part in enumerate(parts, 1):
+                t0 = time.time()
+                try:
+                    bot.send_text(uid, part, context_token=ctx)
+                    print(
+                        f'[WX] send ok part={i}/{len(parts)} len={len(part)} '
+                        f'dt={time.time()-t0:.1f}s',
+                        file=sys.__stdout__,
+                    )
+                except Exception as e:
+                    print(
+                        f'[WX] send err part={i}/{len(parts)} len={len(part)} '
+                        f'dt={time.time()-t0:.1f}s {type(e).__name__}: {e}',
+                        file=sys.__stdout__,
+                    )
+                    return False
+            return True
 
         def _send(show): # 控制中间消息发送频率
             """
             最多发送 9 条中间消息
-            每条最多 2000 字
+            单条过长时分片发送，不丢弃内容
             发得越多，后面间隔越长：6 * mi 秒
             """
 
@@ -604,7 +609,7 @@ def on_message(bot, msg):
                 return False
             if mi and now - last_send < 6 * mi:
                 return None
-            if _wx_send(show[:2000]):
+            if _wx_send(show):
                 mi += 1
                 last_send = time.time()
                 return True
@@ -636,7 +641,7 @@ def on_message(bot, msg):
         done, partial = _turn_parts(result)
         rest = '\n\n'.join(done[sent:] + [partial] + ['\n\n[任务已完成]'])
         if rest.strip():
-            _wx_send((_clean(rest))[-2000:]) # 只取最后 2000 字发微信，避免超长消息发送失败
+            _wx_send(_clean(rest))
 
         # 如果 Agent 生成了文件
         files = re.findall(r'\[FILE:([^\]]+)\]', result)
