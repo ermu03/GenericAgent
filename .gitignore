@@ -115,3 +115,6 @@ reflect/*
 **/__pycache__/
 
 .claude/
+
+uv.lock
+
