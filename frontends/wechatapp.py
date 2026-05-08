@@ -29,6 +29,10 @@ UA = f'openclaw-weixin/{VER}'
 ITEM_IMAGE, ITEM_FILE, ITEM_VIDEO = 2, 4, 5
 CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
 WECHAT_TEXT_CHUNK_SIZE = 5000
+WECHAT_TEXT_FILE_EXTS = {
+    '.cfg', '.conf', '.css', '.csv', '.env', '.html', '.ini', '.js', '.json', '.jsx',
+    '.log', '.md', '.py', '.sh', '.sql', '.toml', '.ts', '.tsx', '.txt', '.xml', '.yaml', '.yml',
+}
 
 def _uin():
     """生成一个“随机整数”的 Base64 字符串表示。"""
@@ -42,6 +46,14 @@ def _split_text(text, limit=WECHAT_TEXT_CHUNK_SIZE):
     if not text:
         return []
     return [text[i:i + limit] for i in range(0, len(text), limit)]
+
+
+def _wechat_file_display_name(file_path):
+    """微信打不开部分源码/配置扩展名；发送时仅改展示文件名，不改本地文件。"""
+    fp = Path(file_path)
+    if fp.suffix.lower() in WECHAT_TEXT_FILE_EXTS and fp.suffix.lower() != '.txt':
+        return f'{fp.name}.txt'
+    return fp.name
 
 
 class WxBotClient:
@@ -248,7 +260,16 @@ class WxBotClient:
                 print(f'[WX] CDN upload retry {attempt}: {e}', file=sys.__stdout__)
         raise last_err
 
-    def _send_media(self, to_user_id, file_path, media_type, item_type, item_key, context_token=''):
+    def _send_media(
+        self,
+        to_user_id,
+        file_path,
+        media_type,
+        item_type,
+        item_key,
+        context_token='',
+        display_name=None,
+    ):
         fp = Path(file_path)
         raw = fp.read_bytes()
         filekey = uuid.uuid4().hex
@@ -297,7 +318,7 @@ class WxBotClient:
         media = self._upload(filekey, upload_param, raw, aes_key=aes_key, upload_url=upload_url)
         item = {'media': media}
         if item_key == 'file_item':
-            item.update({'file_name': fp.name, 'len': str(len(raw))})
+            item.update({'file_name': display_name or fp.name, 'len': str(len(raw))})
         elif item_key == 'image_item':
             thumb_param = resp.get('thumb_upload_param', '')
             thumb_url = resp.get('thumb_upload_full_url', '')
@@ -341,8 +362,16 @@ class WxBotClient:
             {'msg': msg, 'base_info': {'channel_version': VER}},
         )
 
-    def send_file(self, to_user_id, file_path, context_token=''):
-        return self._send_media(to_user_id, file_path, 3, ITEM_FILE, 'file_item', context_token)
+    def send_file(self, to_user_id, file_path, context_token='', display_name=None):
+        return self._send_media(
+            to_user_id,
+            file_path,
+            3,
+            ITEM_FILE,
+            'file_item',
+            context_token,
+            display_name=display_name,
+        )
 
     def send_image(self, to_user_id, file_path, context_token=''):
         return self._send_media(to_user_id, file_path, 1, ITEM_IMAGE, 'image_item', context_token)
@@ -700,12 +729,12 @@ def on_message(bot, msg):
                     raise FileNotFoundError(f"文件不存在: {fpath}")
                 ext = os.path.splitext(fpath)[1].lower()
                 if ext in {'.mp4', '.mov', '.m4v', '.webm'}:
-                    sender = bot.send_video
+                    bot.send_video(uid, fpath, context_token=ctx)
                 elif ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}:
-                    sender = bot.send_image
+                    bot.send_image(uid, fpath, context_token=ctx)
                 else:
-                    sender = bot.send_file
-                sender(uid, fpath, context_token=ctx)
+                    display_name = _wechat_file_display_name(fpath)
+                    bot.send_file(uid, fpath, context_token=ctx, display_name=display_name)
                 print(f'[WX] sent media: {fpath}', file=sys.__stdout__)
             except Exception as e:
                 print(f'[WX] send media err: {e}', file=sys.__stdout__)
