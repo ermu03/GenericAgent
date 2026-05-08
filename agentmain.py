@@ -26,6 +26,7 @@ from llmcore import (
     NativeToolClient,
     NativeClaudeSession,
     NativeOAISession,
+    resolve_client,
 )
 from agent_loop import agent_runner_loop
 from ga import GenericAgentHandler, smart_format, get_global_memory, format_error, consume_file
@@ -89,9 +90,8 @@ def get_system_prompt():
     prompt += get_global_memory()
     return prompt
 
-
-class GeneraticAgent:
-    """GeneraticAgent 负责加载 key、选择 LLM、维护任务队列、组装系统提示词并启动 loop"""
+class GenericAgent:
+    """GenericAgent 负责加载 key、选择 LLM、维护任务队列、组装系统提示词并启动 loop"""
 
     def __init__(self):
         os.makedirs(os.path.join(script_dir, 'temp'), exist_ok=True)
@@ -106,6 +106,7 @@ class GeneraticAgent:
         self.inc_out = False
         self.verbose = True
         self.peer_hint = True
+        self.log_path = os.path.join(script_dir, f'temp/model_responses/model_responses_{int(time.time()*1e6)%1000000:06d}.txt')
         self.load_llm_sessions()
 
     def load_llm_sessions(self):
@@ -122,19 +123,14 @@ class GeneraticAgent:
             if not any(x in k for x in ['api', 'config', 'cookie']):
                 continue
             try:
-                if 'native' in k and 'claude' in k:
-                    llm_sessions.append(NativeToolClient(NativeClaudeSession(cfg=cfg)))
-                elif 'native' in k and 'oai' in k:
-                    llm_sessions.append(NativeToolClient(NativeOAISession(cfg=cfg)))
-                elif 'claude' in k:
-                    llm_sessions.append(ToolClient(ClaudeSession(cfg=cfg)))
-                elif 'oai' in k:
-                    llm_sessions.append(ToolClient(LLMSession(cfg=cfg)))
-                elif 'mixin' in k:
+                if 'mixin' in k:
                     llm_sessions.append({'mixin_cfg': cfg})
+                else:
+                    client = resolve_client(k)
+                    if client:
+                        llm_sessions.append(client)
             except:
                 pass
-
         for i, s in enumerate(llm_sessions):
             if isinstance(s, dict) and 'mixin_cfg' in s:
                 try:
@@ -255,7 +251,6 @@ class GeneraticAgent:
             # 生成系统提示词；如果当前 LLM backend 有额外系统提示词，就拼上，没有就用空字符串
             # getattr(对象, 属性名, 默认值)：安全获取对象 A 的属性 B，如果不存在，就返回默认值 C
             sys_prompt = get_system_prompt() + getattr(self.llmclient.backend, 'extra_sys_prompt', '')
-            
             # 给 Agent 一个额外提示：如果用户提到其他会话或后台任务，
             # 可以去 temp/model_responses/ 找近期文件
             if self.peer_hint:
@@ -288,6 +283,7 @@ class GeneraticAgent:
             self.handler = new_handler
 
             # although new handler, the **full** history is in llmclient, so it is full history!
+            self.llmclient.log_path = self.log_path
             gen = agent_runner_loop(
                 self.llmclient,
                 sys_prompt,
@@ -351,7 +347,10 @@ class GeneraticAgent:
                 self.task_queue.task_done()
                 if self.handler is not None:
                     # 给 handler 的代码执行器发停止信号
-                    self.handler.code_stop_signal.append(1) 
+                    self.handler.code_stop_signal.append(1)
+
+
+GeneraticAgent = GenericAgent
 
 
 if __name__ == '__main__':
@@ -364,15 +363,16 @@ if __name__ == '__main__':
     parser.add_argument('--input', help='prompt')
     parser.add_argument('--llm_no', type=int, default=0)
     parser.add_argument('--verbose', action='store_true')
-    parser.add_argument('--bg', action='store_true', help='popen, print PID, exit')
+    parser.add_argument('--nobg', action='store_true')
     args = parser.parse_args()
 
-    if args.bg:
+    if args.task and not args.nobg:
         import subprocess, platform
 
         cmd = [sys.executable, os.path.abspath(__file__)] + [
-            a for a in sys.argv[1:] if a != '--bg'
+            a for a in sys.argv[1:] if a != '--nobg'
         ]
+        cmd.append('--nobg')
         d = os.path.join(script_dir, f'temp/{args.task}')
         os.makedirs(d, exist_ok=True)
         p = subprocess.Popen(
@@ -405,6 +405,8 @@ if __name__ == '__main__':
             with open(infile, 'w', encoding='utf-8') as f:
                 f.write(args.input)
 
+        if fh := consume_file(d, '_history.json'):
+            agent.llmclient.backend.history = json.loads(fh)
         with open(infile, encoding='utf-8') as f:
             raw = f.read()
 
@@ -452,6 +454,8 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f'[Reflect] check() error: {e}')
                 continue
+            if task and task == '/exit':
+                break
             if task is None:
                 continue
 
