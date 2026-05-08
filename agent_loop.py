@@ -240,7 +240,8 @@ def _clean_content(text):
         preview = '\n'.join(body[:5])
         return f'```{lang}\n{preview}\n  ... ({len(body)} lines)\n```'
 
-    text = re.sub(r'```[\s\S]*?```', _shrink_code, text)
+    # Keep full code blocks in frontend output. Only internal XML-like tags are cleaned below.
+    # text = re.sub(r'```[\s\S]*?```', _shrink_code, text)
     patterns = [
         r'<file_content>[\s\S]*?</file_content>',
         r'<tool_(?:use|call)>[\s\S]*?</tool_(?:use|call)>',
