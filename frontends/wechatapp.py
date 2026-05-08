@@ -445,17 +445,38 @@ def _strip_md(t):
     转换：无序列表改成 •
     清理：H5/H6 标题符号、有序列表编号、引用符号、多余空行
     """
-    def _trunc_code(m):
-        return m.group()
-    t = re.sub(r'(`{3,})[\s\S]*?\1', _trunc_code, t)
+    code_blocks = []
+
+    def _hold_code(m):
+        code_blocks.append(m.group(0))
+        return f'\x00CODE{len(code_blocks)-1}\x00'
+
+    def _restore_code(m):
+        return code_blocks[int(m.group(1))]
+
+    def _format_bullet_lines(text):
+        # WeChat rich-text treats ordinary single newlines as soft breaks.
+        # Use Markdown hard breaks around bullet lines so bullets stay on separate lines.
+        text = re.sub(r'(?<!\n)[ \t]+•[ \t]+', '\n• ', text)
+        lines = text.split('\n')
+        for i, line in enumerate(lines):
+            if line.startswith('• '):
+                if i > 0 and lines[i - 1].strip() and not lines[i - 1].endswith('  '):
+                    lines[i - 1] += '  '
+                lines[i] = line.rstrip() + '  '
+        return '\n'.join(lines)
+
+    t = re.sub(r'(`{3,})[\s\S]*?\1', _hold_code, t)
     # inline code: keep (WeChat renders it)
     # bold/italic (*/**/***): keep (WeChat renders it)
     t = re.sub(r'!\[.*?\]\(.*?\)', '', t)                        # images: remove
     t = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', t)              # links: text only
     t = re.sub(r'^#{5,6}\s+', '', t, flags=re.M)                 # H5-H6: strip (H1-H4 kept)
     t = re.sub(r'^\s*[-*+]\s+', '• ', t, flags=re.M)             # unordered list: bullet
+    t = _format_bullet_lines(t)
     t = re.sub(r'^\s*\d+\.\s+', '', t, flags=re.M)               # ordered list: strip num
     t = re.sub(r'^\s*>\s?', '', t, flags=re.M)                   # blockquote: strip
+    t = re.sub(r'\x00CODE(\d+)\x00', _restore_code, t)
     # horizontal rules (---): keep (WeChat renders it)
     return re.sub(r'\n{3,}', '\n\n', t).strip()
 
