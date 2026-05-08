@@ -29,7 +29,6 @@ UA = f'openclaw-weixin/{VER}'
 ITEM_IMAGE, ITEM_FILE, ITEM_VIDEO = 2, 4, 5
 CDN_BASE = 'https://novac2c.cdn.weixin.qq.com/c2c'
 WECHAT_TEXT_CHUNK_SIZE = 5000
-TYPING_REFRESH_INTERVAL = 5
 
 def _uin():
     """生成一个“随机整数”的 Base64 字符串表示。"""
@@ -187,27 +186,8 @@ class WxBotClient:
             {'msg': msg, 'base_info': {'channel_version': VER}},
         )
 
-    def get_config(self, to_user_id, context_token=''):
-        """获取微信会话配置，里面包含 sendtyping 需要的 typing_ticket。"""
-        body = {
-            'ilink_user_id': to_user_id,
-            'base_info': {'channel_version': VER},
-        }
-        if context_token:
-            body['context_token'] = context_token
-        return self._post('ilink/bot/getconfig', body)
-
-    def get_typing_ticket(self, to_user_id, context_token=''):
-        """获取 sendtyping 所需的 typing_ticket。"""
-        config = self.get_config(to_user_id, context_token=context_token)
-        return (config.get('typing_ticket') or '').strip()
-
-    def send_typing(self, to_user_id, typing_ticket='', cancel=False, context_token=''):
-        """告诉微信“机器人正在输入”，typing_ticket 为空时自动获取。"""
-        if not typing_ticket:
-            typing_ticket = self.get_typing_ticket(to_user_id, context_token=context_token)
-        if not typing_ticket:
-            raise RuntimeError('missing typing_ticket')
+    def send_typing(self, to_user_id, typing_ticket='', cancel=False):
+        """告诉微信“机器人正在输入”或取消输入状态。"""
         return self._post(
             'ilink/bot/sendtyping',
             {
@@ -217,6 +197,13 @@ class WxBotClient:
                 'base_info': {'channel_version': VER},
             },
         )
+
+    def get_typing_ticket(self, to_user_id, context_token=''):
+        """从微信会话配置中获取 sendtyping 所需的 typing_ticket。"""
+        payload = {'ilink_user_id': to_user_id}
+        if context_token:
+            payload['context_token'] = context_token
+        return self._post('ilink/bot/getconfig', payload).get('typing_ticket', '')
 
     def _enc(self, raw, aes_key):
         """
@@ -533,32 +520,6 @@ def _turn_parts(t):
     current_turn = turns[-1]
     return completed_turns, current_turn
 
-def _start_typing_keepalive(bot, uid, ctx):
-    """周期性刷新微信输入状态；返回 stop event，调用 set() 后会取消输入状态。"""
-    stop = threading.Event()
-
-    def _loop():
-        ticket = ''
-        try:
-            ticket = bot.get_typing_ticket(uid, context_token=ctx)
-            if not ticket:
-                print('[WX] typing skipped: empty typing_ticket', file=sys.__stdout__)
-                return
-            while not stop.is_set():
-                bot.send_typing(uid, typing_ticket=ticket)
-                stop.wait(TYPING_REFRESH_INTERVAL)
-        except Exception as e:
-            print(f'[WX] typing err: {type(e).__name__}: {e}', file=sys.__stdout__)
-        finally:
-            if ticket and stop.is_set():
-                try:
-                    bot.send_typing(uid, typing_ticket=ticket, cancel=True)
-                except Exception as e:
-                    print(f'[WX] typing cancel err: {type(e).__name__}: {e}', file=sys.__stdout__)
-
-    threading.Thread(target=_loop, daemon=True).start()
-    return stop
-
 def on_message(bot, msg):
     text = bot.extract_text(msg).strip() # 用户发来的文字
     uid = msg.get('from_user_id', '') # 微信用户 ID，回复时要发给这个人
@@ -607,7 +568,20 @@ def on_message(bot, msg):
         # 微信线程  -> agent.put_task() -> Agent 后台线程处理
         # 微信线程  <- dq.get()         <- Agent 把结果写回队列
         dq = agent.put_task(prompt, source="wechat")
-        typing_stop = _start_typing_keepalive(bot, uid, ctx)
+        _typing_stop = threading.Event()
+
+        def _keep_typing():
+            ticket = bot.get_typing_ticket(uid, ctx)
+            if not ticket:
+                return
+            while not _typing_stop.is_set():
+                try:
+                    bot.send_typing(uid, ticket)
+                except:
+                    pass
+                _typing_stop.wait(2.0)
+
+        threading.Thread(target=_keep_typing, daemon=True).start()
 
         # 初始化状态变量
         result = '' # 最终结果文本
@@ -681,7 +655,7 @@ def on_message(bot, msg):
             except queue.Empty:
                 result = '[超时]'
         finally:
-            typing_stop.set()
+            _typing_stop.set()
 
         # 最终结果发送
         done, partial = _turn_parts(result)
