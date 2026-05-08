@@ -858,7 +858,7 @@ class BaseSession:
         self.api_key = cfg["apikey"]
         self.api_base = cfg["apibase"].rstrip("/")
         self.model = cfg.get("model", "")
-        self.context_win = cfg.get("context_win", 28000)
+        self.context_win = cfg.get("context_win", 80000)
         self.history = []
         self.lock = threading.Lock()
         self.system = ""
