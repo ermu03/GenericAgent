@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from .url_utils import extract_note_id_from_url
+
 
 def empty_post() -> dict[str, Any]:
     """返回帖子字段的默认结构。"""
@@ -43,6 +45,8 @@ def default_quality() -> dict[str, Any]:
     return {
         "status": "success",
         "comment_count_collected": 0,
+        "level1_comment_count_collected": 0,
+        "level2_comment_count_collected": 0,
         "comment_limit": 600,
         "comment_owner_count_collected": 0,
         "has_more_comments": None,
@@ -53,6 +57,7 @@ def default_quality() -> dict[str, Any]:
         "verification_required": False,
         "page_state": "normal",
         "elapsed_seconds": 0,
+        "screenshot_path": "",
     }
 
 
@@ -73,6 +78,8 @@ def build_standard_payload(
     quality = {**default_quality(), **(raw_data.get("quality") or {})}
     # 如果采集阶段没有显式写 post.url，就使用浏览器最终 URL 兜底。
     post["url"] = post.get("url") or final_url
+    if not post.get("post_id"):
+        post["post_id"] = extract_note_id_from_url(final_url) or extract_note_id_from_url(input_url)
     return {
         "record_id": "",
         "post": post,

@@ -33,6 +33,29 @@ tasks/
 
 *.zip
 
+# Xiaohongshu fetch plugin data
+# Keep browser_profile visible so login state can be committed when needed.
+data/xhs_data/index.json
+data/xhs_data/raw/
+data/xhs_data/reports/
+data/xhs_data/work/screenshots/
+data/xhs_data/work/*.html
+data/xhs_data/work/browser_profile/**/Cache/
+data/xhs_data/work/browser_profile/**/Code Cache/
+data/xhs_data/work/browser_profile/**/GPUCache/
+data/xhs_data/work/browser_profile/**/DawnGraphiteCache/
+data/xhs_data/work/browser_profile/**/DawnWebGPUCache/
+data/xhs_data/work/browser_profile/**/GrShaderCache/
+data/xhs_data/work/browser_profile/**/GraphiteDawnCache/
+data/xhs_data/work/browser_profile/**/ShaderCache/
+data/xhs_data/work/browser_profile/**/blob_storage/
+data/xhs_data/work/browser_profile/**/LOCK
+data/xhs_data/work/browser_profile/**/LOG
+data/xhs_data/work/browser_profile/**/LOG.old
+data/xhs_data/work/browser_profile/**/History
+data/xhs_data/work/browser_profile/**/History-journal
+!data/xhs_data/work/browser_profile/**/*.log
+
 memory/*
 !memory/memory_management_sop.md
 
@@ -117,4 +140,3 @@ reflect/*
 .claude/
 
 uv.lock
-

@@ -15,6 +15,8 @@ sys.path.insert(0, PROJECT_ROOT)
 _TEMP_DIR = os.path.join(PROJECT_ROOT, 'temp')
 
 from agentmain import GeneraticAgent
+from plugins.xhs_comment_analysis import fetch_xhs_note
+from plugins.xhs_comment_analysis.url_utils import XhsUrlError
 
 # ── WxBotClient (inline from wx_bot_client.py) ──
 for _k in ('HTTPS_PROXY', 'https_proxy'):
@@ -570,6 +572,25 @@ def _turn_parts(t):
     current_turn = turns[-1]
     return completed_turns, current_turn
 
+
+def _send_xhs_status(bot, uid, ctx, text):
+    """发送 /xhs 命令的状态文本，自动按微信长度限制分片。"""
+    for part in _split_text(text):
+        bot.send_text(uid, part, context_token=ctx)
+
+
+def _send_xhs_file(bot, uid, ctx, file_path):
+    """发送 /xhs 生成的文件或截图。"""
+    if not file_path or not os.path.exists(file_path):
+        return
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'}:
+        bot.send_image(uid, file_path, context_token=ctx)
+    else:
+        display_name = _wechat_file_display_name(file_path)
+        bot.send_file(uid, file_path, context_token=ctx, display_name=display_name)
+
+
 def on_message(bot, msg):
     text = bot.extract_text(msg).strip() # 用户发来的文字
     uid = msg.get('from_user_id', '') # 微信用户 ID，回复时要发给这个人
@@ -601,6 +622,62 @@ def on_message(bot, msg):
         else:
             lines = [f"{'→' if cur else '  '} [{i}] {name}" for i, name, cur in agent.list_llms()]
             bot.send_text(uid, 'LLMs:\n' + '\n'.join(lines), context_token=ctx)
+        return
+
+    if text.startswith('/xhs'):
+        def _handle_xhs():
+            try:
+                sent_screenshots = set()
+
+                def _xhs_status_callback(event, payload):
+                    """接收采集插件的进度事件，必要时把截图提前发给用户。"""
+                    message = (payload or {}).get('message', '')
+                    if message and event in {'queued', 'page_opening', 'intervention_required', 'page_state_changed'}:
+                        _send_xhs_status(bot, uid, ctx, message)
+                    screenshot_path = (payload or {}).get('screenshot_path', '')
+                    if screenshot_path and screenshot_path not in sent_screenshots:
+                        sent_screenshots.add(screenshot_path)
+                        _send_xhs_file(bot, uid, ctx, screenshot_path)
+
+                _send_xhs_status(bot, uid, ctx, '开始采集小红书帖子数据...')
+                result = fetch_xhs_note(
+                    text,
+                    headless=True,
+                    comment_limit=600,
+                    status_callback=_xhs_status_callback,
+                    intervention_timeout=120,
+                )
+                payload = result.get('payload') or {}
+                quality = payload.get('quality') or {}
+                record_id = result.get('record_id', '')
+                file_path = result.get('file_path', '')
+                comments = quality.get('comment_count_collected', 0)
+                status = quality.get('status', '')
+                page_state = quality.get('page_state', '')
+                warnings = quality.get('warnings') or []
+                reply = (
+                    '小红书数据采集完成\n\n'
+                    f'record_id: {record_id}\n'
+                    f'状态: {status} / {page_state}\n'
+                    f'评论数: {comments}\n'
+                    f'文件: [FILE:{file_path}]'
+                )
+                if warnings:
+                    reply += '\n\n提示:\n' + '\n'.join(f'- {w}' for w in warnings[:5])
+                _send_xhs_status(bot, uid, ctx, reply)
+                _send_xhs_file(bot, uid, ctx, file_path)
+
+                screenshot_path = quality.get('screenshot_path', '')
+                if screenshot_path and screenshot_path not in sent_screenshots:
+                    sent_screenshots.add(screenshot_path)
+                    _send_xhs_file(bot, uid, ctx, screenshot_path)
+            except XhsUrlError as e:
+                _send_xhs_status(bot, uid, ctx, f'用法: /xhs <小红书帖子链接>\n错误: {e}')
+            except Exception as e:
+                print(f'[WX] xhs err: {type(e).__name__}: {e}', file=sys.__stdout__)
+                _send_xhs_status(bot, uid, ctx, f'小红书数据采集失败: {type(e).__name__}: {e}')
+
+        threading.Thread(target=_handle_xhs, daemon=True).start()
         return
 
     def _handle():

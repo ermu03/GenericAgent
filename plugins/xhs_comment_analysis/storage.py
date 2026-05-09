@@ -76,7 +76,12 @@ def update_index(payload: dict[str, Any], file_path: Path) -> None:
         "input_url": source.get("input_url", ""),
         "final_url": source.get("final_url", ""),
         "fetched_at": source.get("fetched_at", ""),
+        "status": quality.get("status", ""),
+        "page_state": quality.get("page_state", ""),
         "comment_count_collected": quality.get("comment_count_collected", 0),
+        "level1_comment_count_collected": quality.get("level1_comment_count_collected", 0),
+        "level2_comment_count_collected": quality.get("level2_comment_count_collected", 0),
+        "updated_at": source.get("fetched_at", ""),
     }
     items = [item for item in index.get("items", []) if item.get("record_id") != record["record_id"]]
     items.insert(0, record)

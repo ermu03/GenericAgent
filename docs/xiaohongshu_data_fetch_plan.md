@@ -164,6 +164,8 @@ data/xhs_data/work/browser_profile/
 - `warnings`：采集过程中的非致命问题，例如“评论区未滚动到底”。
 - `errors`：导致采集失败或部分失败的错误信息。
 - `comment_count_collected`：实际采集到的评论数。
+- `level1_comment_count_collected`：实际采集到的一级评论数。
+- `level2_comment_count_collected`：实际采集到的二级评论数。
 - `comment_limit`：本次采集评论数上限，第一版为 600。
 - `comment_owner_count_collected`：实际采集到的评论作者数。
 - `has_more_comments`：是否判断还有更多评论未采集。
@@ -193,6 +195,8 @@ data/xhs_data/work/browser_profile/
 {
   "status": "success",
   "comment_count_collected": 0,
+  "level1_comment_count_collected": 0,
+  "level2_comment_count_collected": 0,
   "comment_limit": 600,
   "comment_owner_count_collected": 0,
   "has_more_comments": null,
@@ -273,7 +277,11 @@ data/xhs_data/index.json
       "input_url": "",
       "final_url": "",
       "fetched_at": "",
-      "comment_count_collected": 0
+      "status": "",
+      "page_state": "",
+      "comment_count_collected": 0,
+      "level1_comment_count_collected": 0,
+      "level2_comment_count_collected": 0
     }
   ]
 }
