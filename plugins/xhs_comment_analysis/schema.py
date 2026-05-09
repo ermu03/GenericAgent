@@ -53,11 +53,21 @@ def default_quality() -> dict[str, Any]:
         "missing_fields": [],
         "warnings": [],
         "errors": [],
+        "login_checked": False,
+        "login_success": False,
+        "auth_status": "",
+        "auth_page_state": "",
+        "auth_detection_method": "",
         "login_required": False,
         "verification_required": False,
         "page_state": "normal",
         "elapsed_seconds": 0,
+        "auth_elapsed_seconds": 0,
         "screenshot_path": "",
+        "auth_screenshot_path": "",
+        "xhs_cookie_summary": {},
+        "auth_attempts": [],
+        "debug_snapshot_paths": [],
     }
 
 

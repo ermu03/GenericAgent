@@ -78,6 +78,7 @@ def update_index(payload: dict[str, Any], file_path: Path) -> None:
         "fetched_at": source.get("fetched_at", ""),
         "status": quality.get("status", ""),
         "page_state": quality.get("page_state", ""),
+        "auth_status": quality.get("auth_status", ""),
         "comment_count_collected": quality.get("comment_count_collected", 0),
         "level1_comment_count_collected": quality.get("level1_comment_count_collected", 0),
         "level2_comment_count_collected": quality.get("level2_comment_count_collected", 0),

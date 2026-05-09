@@ -270,10 +270,10 @@ function detectPageState() {
   const title = document.title || '';
   const lowerUrl = location.href.toLowerCase();
   const combined = text + title + lowerUrl;
-  const hasLogin = /登录|扫码|验证码|安全验证|拖动滑块|验证/.test(text + title);
+  const hasLogin = /登录|扫码|手机号登录|短信登录|请先登录/.test(text + title);
   if (/404|not.?found/i.test(title + text)) return 'not_found';
   if (/ip at risk|error_code=300012|安全限制/i.test(combined)) return 'risk_control';
-  if (/验证码|安全验证|拖动滑块|verify|captcha/i.test(combined)) return 'verification_required';
+  if (/安全验证|拖动滑块|人机验证|请完成验证|verify|captcha/i.test(combined)) return 'verification_required';
   if (/登录|扫码登录|请先登录/.test(text + title)) return 'login_required';
   if (hasLogin) return 'login_or_verification';
   return 'normal';

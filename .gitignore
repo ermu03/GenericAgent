@@ -34,27 +34,80 @@ tasks/
 *.zip
 
 # Xiaohongshu fetch plugin data
-# Keep browser_profile visible so login state can be committed when needed.
+# Keep local_login_profile visible so login state can be committed when needed.
 data/xhs_data/index.json
 data/xhs_data/raw/
 data/xhs_data/reports/
+data/xhs_data/work/debug/
 data/xhs_data/work/screenshots/
 data/xhs_data/work/*.html
-data/xhs_data/work/browser_profile/**/Cache/
-data/xhs_data/work/browser_profile/**/Code Cache/
-data/xhs_data/work/browser_profile/**/GPUCache/
-data/xhs_data/work/browser_profile/**/DawnGraphiteCache/
-data/xhs_data/work/browser_profile/**/DawnWebGPUCache/
-data/xhs_data/work/browser_profile/**/GrShaderCache/
-data/xhs_data/work/browser_profile/**/GraphiteDawnCache/
-data/xhs_data/work/browser_profile/**/ShaderCache/
-data/xhs_data/work/browser_profile/**/blob_storage/
-data/xhs_data/work/browser_profile/**/LOCK
-data/xhs_data/work/browser_profile/**/LOG
-data/xhs_data/work/browser_profile/**/LOG.old
-data/xhs_data/work/browser_profile/**/History
-data/xhs_data/work/browser_profile/**/History-journal
-!data/xhs_data/work/browser_profile/**/*.log
+data/xhs_data/work/browser_profile/
+data/xhs_data/work/*profile/**/Cache/
+data/xhs_data/work/*profile/**/Code Cache/
+data/xhs_data/work/*profile/**/GPUCache/
+data/xhs_data/work/*profile/**/DawnGraphiteCache/
+data/xhs_data/work/*profile/**/DawnWebGPUCache/
+data/xhs_data/work/*profile/**/GrShaderCache/
+data/xhs_data/work/*profile/**/GraphiteDawnCache/
+data/xhs_data/work/*profile/**/ShaderCache/
+data/xhs_data/work/*profile/**/blob_storage/
+data/xhs_data/work/*profile/**/optimization_guide_model_store/
+data/xhs_data/work/*profile/**/optimization_guide_hint_cache_store/
+data/xhs_data/work/*profile/**/component_crx_cache/
+data/xhs_data/work/*profile/**/extensions_crx_cache/
+data/xhs_data/work/*profile/**/Extensions/
+data/xhs_data/work/*profile/**/Storage/ext/
+data/xhs_data/work/*profile/**/Web Applications/Manifest Resources/
+data/xhs_data/work/*profile/**/Shared Dictionary/
+data/xhs_data/work/*profile/**/AutofillAiModelCache/
+data/xhs_data/work/*profile/**/AutofillStrikeDatabase/
+data/xhs_data/work/*profile/**/BudgetDatabase/
+data/xhs_data/work/*profile/**/ClientCertificates/
+data/xhs_data/work/*profile/**/PersistentOriginTrials/
+data/xhs_data/work/*profile/**/Site Characteristics Database/
+data/xhs_data/work/*profile/**/Sync Data/
+data/xhs_data/work/*profile/**/GCM Store/
+data/xhs_data/work/*profile/**/chrome_cart_db/
+data/xhs_data/work/*profile/**/commerce_subscription_db/
+data/xhs_data/work/*profile/**/discount_infos_db/
+data/xhs_data/work/*profile/**/discounts_db/
+data/xhs_data/work/*profile/**/parcel_tracking_db/
+data/xhs_data/work/*profile/**/shared_proto_db/
+data/xhs_data/work/*profile/ActorSafetyLists/
+data/xhs_data/work/*profile/AmountExtractionHeuristicRegexes/
+data/xhs_data/work/*profile/CaptchaProviders/
+data/xhs_data/work/*profile/CertificateRevocation/
+data/xhs_data/work/*profile/Crowd Deny/
+data/xhs_data/work/*profile/Dictionaries/
+data/xhs_data/work/*profile/FileTypePolicies/
+data/xhs_data/work/*profile/FirstPartySetsPreloaded/
+data/xhs_data/work/*profile/MEIPreload/
+data/xhs_data/work/*profile/NativeMessagingHosts/
+data/xhs_data/work/*profile/OnDeviceHeadSuggestModel/
+data/xhs_data/work/*profile/OptimizationHints/
+data/xhs_data/work/*profile/OriginTrials/
+data/xhs_data/work/*profile/PKIMetadata/
+data/xhs_data/work/*profile/PrivacySandboxAttestationsPreloaded/
+data/xhs_data/work/*profile/SSLErrorAssistant/
+data/xhs_data/work/*profile/Safe Browsing/
+data/xhs_data/work/*profile/SafetyTips/
+data/xhs_data/work/*profile/Subresource Filter/
+data/xhs_data/work/*profile/TrustTokenKeyCommitments/
+data/xhs_data/work/*profile/WasmTtsEngine/
+data/xhs_data/work/*profile/WidevineCdm/
+data/xhs_data/work/*profile/ZxcvbnData/
+data/xhs_data/work/*profile/hyphen-data/
+data/xhs_data/work/*profile/segmentation_platform/
+data/xhs_data/work/*profile/first_party_sets.db*
+data/xhs_data/work/*profile/Variations
+data/xhs_data/work/*profile/**/LOCK
+data/xhs_data/work/*profile/**/LOG
+data/xhs_data/work/*profile/**/LOG.old
+data/xhs_data/work/*profile/**/History
+data/xhs_data/work/*profile/**/History-journal
+data/xhs_data/work/*profile/**/Sessions/
+data/xhs_data/work/*profile/**/File System/
+!data/xhs_data/work/*profile/**/*.log
 
 memory/*
 !memory/memory_management_sop.md

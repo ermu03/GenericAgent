@@ -24,7 +24,7 @@
 - 帖子下的直接评论是一级评论；对一级评论的回复是二级评论。
 - 第一版需要采集二级评论，并保留评论之间的回复关系。
 - DrissionPage 从第一版开始使用 headless 模式。
-- 第一版需要包含二维码登录和验证码提示流程。
+- 第一版需要包含浏览器 profile 登录态复用和验证码提示流程。
 - 同一个帖子重复采集时覆盖原 JSON，不保留历史版本。
 
 ## 目录规划
@@ -53,6 +53,8 @@ data/xhs_data/work/
 
 `reports/` 留给后续分析阶段。
 
+登录状态由 DrissionPage/Chromium profile 自己管理。
+
 ## 模块规划
 
 第一版插件建议包含：
@@ -61,6 +63,7 @@ data/xhs_data/work/
 plugins/xhs_comment_analysis/
   __init__.py
   browser.py
+  login.py
   extractor.py
   fetch.py
   schema.py
@@ -71,6 +74,7 @@ plugins/xhs_comment_analysis/
 职责：
 
 - `browser.py`：封装 DrissionPage 浏览器启动、登录态复用、页面打开和基础页面状态判断。
+- `login.py`：检查浏览器 profile 登录态，识别登录、验证码和风控状态。
 - `extractor.py`：接收 DrissionPage 页面对象，提取帖子信息，滚动评论区，采集评论并去重。
 - `fetch.py`：编排完整数据获取流程，从 URL 到保存 JSON。
 - `schema.py`：把采集到的原始数据转换成标准 JSON 结构。
@@ -131,10 +135,10 @@ DrissionPage 负责控制 Chromium 打开页面并读取数据。
 浏览器用户数据目录建议放在：
 
 ```text
-data/xhs_data/work/browser_profile/
+data/xhs_data/work/local_login_profile/
 ```
 
-这样可以复用登录态。
+这样可以复用本地有界面登录后的完整浏览器状态。也可以通过 `XHS_BROWSER_PROFILE_DIR` 指定其他 profile 目录。
 
 ## 数据提取目标
 
@@ -169,10 +173,19 @@ data/xhs_data/work/browser_profile/
 - `comment_limit`：本次采集评论数上限，第一版为 600。
 - `comment_owner_count_collected`：实际采集到的评论作者数。
 - `has_more_comments`：是否判断还有更多评论未采集。
+- `login_checked`：是否已经执行登录态检查。
+- `login_success`：登录态是否可用。
+- `auth_status`：登录流程状态，例如 `logged_in`、`login_required`、`verification_required`、`risk_control`。
+- `auth_detection_method`：登录态判断来源，例如 `dom` 或 `cookie`。
 - `login_required`：是否检测到需要登录。
 - `verification_required`：是否检测到验证码或安全验证。
 - `page_state`：页面状态，例如 `normal`、`login_required`、`verification_required`、`not_found`。
 - `elapsed_seconds`：本次采集耗时。
+- `auth_elapsed_seconds`：登录检查和等待耗时。
+- `screenshot_path` / `auth_screenshot_path`：登录、验证码或安全验证页面截图路径。
+- `xhs_cookie_summary`：小红书相关 cookie 的摘要，只记录字段名是否存在，不记录 cookie 值。
+- `auth_attempts`：登录态验证页面的尝试记录，用于排查登录态是否失效或被风控。
+- `debug_snapshot_paths`：真实页面数据分布调试快照路径，用于后续修正字段提取逻辑。
 
 ## 标准 JSON
 
@@ -203,10 +216,21 @@ data/xhs_data/work/browser_profile/
   "missing_fields": [],
   "warnings": [],
   "errors": [],
+  "login_checked": false,
+  "login_success": false,
+  "auth_status": "",
+  "auth_page_state": "",
+  "auth_detection_method": "",
   "login_required": false,
   "verification_required": false,
   "page_state": "normal",
-  "elapsed_seconds": 0
+  "elapsed_seconds": 0,
+  "auth_elapsed_seconds": 0,
+  "screenshot_path": "",
+  "auth_screenshot_path": "",
+  "xhs_cookie_summary": {},
+  "auth_attempts": [],
+  "debug_snapshot_paths": []
 }
 ```
 
@@ -293,25 +317,35 @@ data/xhs_data/index.json
 
 ## 登录和验证码
 
-第一版需要做二维码登录和验证码提示流程。
+第一版需要做浏览器 profile 登录态复用和验证码提示流程。
 
 需要识别：
 
 - 未登录。
-- 登录二维码。
 - 验证码或安全验证。
 - 页面打开失败。
 - 链接无效。
 
-如果需要二维码登录，插件需要把登录提示返回给微信用户。验证码或安全验证暂不自动破解，需要明确提示用户介入。
+验证码或安全验证暂不自动破解，需要明确提示用户介入。
 
-后续可以参考 `xhs-cli-headless` 的二维码登录、cookie 导入和登录态诊断思路。
+当前登录方案：
+
+- 使用 `python -m plugins.xhs_comment_analysis --login-profile` 打开固定 profile，并在有界面浏览器中手动登录小红书。
+- 登录态和浏览器本地状态保存在 `data/xhs_data/work/local_login_profile/`。
+- 登录信息随项目 git 同步，服务器采集流程直接复用同一个 profile。
+- 采集流程先检查浏览器 profile 是否已有 `web_session`。
+- 如果已有登录会话，再打开 `https://www.xiaohongshu.com/explore` 验证登录态。
+- DrissionPage 只负责复用 profile 打开页面和采集数据，不使用帖子/评论私有接口采集数据。
+- cookie 只作为诊断摘要写入 `quality.xhs_cookie_summary`，不把敏感 cookie 值写入输出 JSON。
+- 真实页面请求会保存调试快照到 `data/xhs_data/work/debug/`，用于观察页面状态对象、候选帖子字段、候选评论数组和 DOM 分布。
+
+验证码、安全验证或风控仍然只提示用户介入，不自动破解。
 
 ## 第一版完成标准
 
 - 能从 `/xhs <url>` 提取小红书链接。
 - 能以 headless 模式启动 DrissionPage 并打开链接。
-- 能处理二维码登录提示和验证码提示。
+- 能处理 profile 未登录提示和验证码提示。
 - 能保存一个标准 JSON 文件到 `data/xhs_data/raw/`。
 - JSON 至少包含帖子基础信息、已采集到的一级评论和二级评论。
 - 失败时能返回明确错误原因。

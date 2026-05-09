@@ -632,7 +632,19 @@ def on_message(bot, msg):
                 def _xhs_status_callback(event, payload):
                     """接收采集插件的进度事件，必要时把截图提前发给用户。"""
                     message = (payload or {}).get('message', '')
-                    if message and event in {'queued', 'page_opening', 'intervention_required', 'page_state_changed'}:
+                    visible_events = {
+                        'queued',
+                        'login_checking',
+                        'login_required',
+                        'login_success',
+                        'login_verification_required',
+                        'page_opening',
+                        'intervention_required',
+                        'page_state_changed',
+                        'debug_snapshot_saved',
+                        'debug_snapshot_failed',
+                    }
+                    if message and event in visible_events:
                         _send_xhs_status(bot, uid, ctx, message)
                     screenshot_path = (payload or {}).get('screenshot_path', '')
                     if screenshot_path and screenshot_path not in sent_screenshots:
@@ -645,7 +657,7 @@ def on_message(bot, msg):
                     headless=True,
                     comment_limit=600,
                     status_callback=_xhs_status_callback,
-                    intervention_timeout=120,
+                    intervention_timeout=240,
                 )
                 payload = result.get('payload') or {}
                 quality = payload.get('quality') or {}
@@ -654,11 +666,13 @@ def on_message(bot, msg):
                 comments = quality.get('comment_count_collected', 0)
                 status = quality.get('status', '')
                 page_state = quality.get('page_state', '')
+                auth_status = quality.get('auth_status', '')
                 warnings = quality.get('warnings') or []
                 reply = (
                     '小红书数据采集完成\n\n'
                     f'record_id: {record_id}\n'
                     f'状态: {status} / {page_state}\n'
+                    f'登录: {auth_status}\n'
                     f'评论数: {comments}\n'
                     f'文件: [FILE:{file_path}]'
                 )

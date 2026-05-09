@@ -198,20 +198,24 @@ DrissionPage 可以在服务器上控制 Chromium 浏览器，支持 headless �
 - 本地开发环境：WSL2，Ubuntu 22.04。
 - 本地 Python：Python 3.10。
 - 本地 Chrome：已检测到 `/usr/bin/google-chrome`。
-- 本地 DrissionPage：尚未安装。
+- 本地 DrissionPage：已加入项目依赖并安装到虚拟环境。
 - 服务器环境：Ubuntu 24.04。
 - 后续如需安装 Chrome、DrissionPage 或浏览器相关组件，需要先明确告知再执行。
 
 大致思路：
 
 - 使用 DrissionPage 打开用户提供的小红书链接。
-- 复用浏览器登录态。
+- 使用 `python -m plugins.xhs_comment_analysis --login-profile` 打开固定浏览器 profile，人工登录小红书。
+- 服务器采集流程直接复用这个浏览器 profile 中的登录态和本地状态。
+- 验证码、安全验证或风控状态只提示用户介入，不自动破解。
 - 从页面可见内容、DOM 或页面状态中提取帖子和评论数据。
 - 滚动评论区，逐步采集评论。
 - 将结果整理成标准 JSON，保存到 `data/xhs_data/raw/`。
 - 后续基于 JSON 生成报告或回答问题。
 
-这个方案的主要问题是登录和验证码流程仍需要设计。相关处理可以参考其他方案里的二维码登录、cookie 保存和登录态诊断思路。
+登录态和浏览器本地状态保存在 `data/xhs_data/work/local_login_profile/`，并随项目 git 同步。输出 JSON 的 `quality` 会记录登录检测状态、截图路径和 cookie 字段摘要，但不会记录敏感 cookie 值。
+
+真实页面请求会额外保存调试快照到 `data/xhs_data/work/debug/`，用于观察页面状态对象、候选帖子字段、候选评论数组和 DOM 分布，后续根据这些中间结果修正字段提取逻辑。
 
 ### 2. TMWebDriver
 
@@ -231,5 +235,4 @@ GenericAgent 已有的浏览器控制方案。
 
 一个面向无 GUI 服务器的小红书 CLI 项目。
 
-它的 headless 登录、cookie 导入、结构化输出和错误诊断设计值得参考。但它主要通过 HTTP API 和签名逻辑获取数据，不作为当前默认实现路线。
-
+它的结构化输出和错误诊断设计值得参考。但它主要通过 HTTP API 和签名逻辑获取数据，不作为当前默认实现路线。
