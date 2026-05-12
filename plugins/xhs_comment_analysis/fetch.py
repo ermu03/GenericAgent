@@ -7,7 +7,6 @@ from typing import Any
 import uuid
 
 from .browser import close_browser, open_browser, save_page_screenshot
-from .debug_snapshot import save_debug_snapshot
 from .extractor import extract_note_data
 from .login import BLOCKING_AUTH_STATUSES, ensure_logged_in
 from .schema import build_standard_payload
@@ -21,13 +20,13 @@ def fetch_xhs_note(
     text_or_url: str,
     *,
     headless: bool = True,
-    comment_limit: int = 600,
+    comment_limit: int = 800,
     status_callback=None,
     intervention_timeout: int = 120,
 ) -> dict[str, Any]:
     """获取一个小红书帖子的标准 JSON，并保存到 data/xhs_data/raw/。"""
     input_url = extract_xhs_url(text_or_url)
-    comment_limit = max(1, min(int(comment_limit), 600))
+    comment_limit = max(1, min(int(comment_limit), 800))
     started_at = datetime.now(timezone.utc)
     browser = None
     target_opened = False
@@ -47,45 +46,18 @@ def fetch_xhs_note(
                 status_callback=status_callback,
             )
             if auth_quality.get("auth_status") in BLOCKING_AUTH_STATUSES:
-                raw_data = _build_auth_failure_raw_data(auth_quality, comment_limit)
-                if auth_quality.get("auth_page_state") != "missing_profile_session":
-                    _append_debug_snapshot_path(
-                        raw_data,
-                        _save_debug_snapshot_safely(
-                            tab,
-                            input_url=input_url,
-                            phase="auth_blocked",
-                            status_callback=status_callback,
-                        ),
-                    )
+                raw_data = _build_auth_failure_raw_data(auth_quality)
             else:
                 _emit(status_callback, "page_opening", message="正在打开小红书链接")
                 tab.get(input_url)
                 target_opened = True
-                debug_paths = [
-                    _save_debug_snapshot_safely(
-                        tab,
-                        input_url=input_url,
-                        phase="after_open",
-                        status_callback=status_callback,
-                    )
-                ]
                 raw_data = _extract_with_intervention_wait(
                     tab,
                     comment_limit=comment_limit,
                     status_callback=status_callback,
                     intervention_timeout=intervention_timeout,
                 )
-                debug_paths.append(
-                    _save_debug_snapshot_safely(
-                        tab,
-                        input_url=input_url,
-                        phase="after_extract",
-                        status_callback=status_callback,
-                    )
-                )
-                for debug_path in debug_paths:
-                    _append_debug_snapshot_path(raw_data, debug_path)
+                _emit_collection_finished(status_callback, raw_data)
                 _merge_auth_quality(raw_data, auth_quality)
 
             final_url = (getattr(tab, "url", "") or input_url) if target_opened else input_url
@@ -97,59 +69,47 @@ def fetch_xhs_note(
                 final_url=final_url,
                 fetched_at=started_at.isoformat(),
             )
+            _emit(status_callback, "saving", message="正在保存小红书数据")
             result = save_payload(payload)
             _emit(
                 status_callback,
                 "saved",
                 message="小红书数据已保存",
                 file_path=result.get("file_path", ""),
-                record_id=result.get("record_id", ""),
+                post_id=result.get("post_id", ""),
+            )
+            _emit(
+                status_callback,
+                "completed",
+                message=_build_completion_message(result),
+                file_path=result.get("file_path", ""),
+                post_id=result.get("post_id", ""),
+                quality=result.get("quality") or {},
             )
             return result
         finally:
             close_browser(browser)
 
 
-def _save_debug_snapshot_safely(tab, *, input_url: str, phase: str, status_callback) -> str:
-    """保存调试快照；失败只返回空路径，不阻断真实采集。"""
-    try:
-        return save_debug_snapshot(
-            tab,
-            input_url=input_url,
-            phase=phase,
-            status_callback=status_callback,
-        )
-    except Exception as exc:
-        _emit(status_callback, "debug_snapshot_failed", message=f"保存小红书页面调试快照失败: {exc}")
-        return ""
-
-
-def _append_debug_snapshot_path(raw_data: dict[str, Any], path: str) -> None:
-    """把调试快照路径写入 quality，便于后续根据真实页面结构修正提取逻辑。"""
-    if not path:
-        return
-    quality = raw_data.setdefault("quality", {})
-    paths = quality.setdefault("debug_snapshot_paths", [])
-    if path not in paths:
-        paths.append(path)
-
-
-def _build_auth_failure_raw_data(auth_quality: dict[str, Any], comment_limit: int) -> dict[str, Any]:
+def _build_auth_failure_raw_data(auth_quality: dict[str, Any]) -> dict[str, Any]:
     """登录/验证没有完成时，构造可保存的失败结果。"""
     quality = {
-        **auth_quality,
         "status": "failed",
+        "page_state": auth_quality.get("page_state") or auth_quality.get("auth_status") or "login_required",
         "comment_count_collected": 0,
         "level1_comment_count_collected": 0,
         "level2_comment_count_collected": 0,
-        "comment_limit": comment_limit,
-        "comment_owner_count_collected": 0,
         "has_more_comments": None,
         "missing_fields": ["post.title", "post.content", "post_owner.nickname"],
-        "page_state": auth_quality.get("auth_page_state") or auth_quality.get("auth_status") or "login_required",
+        "warnings": auth_quality.get("warnings") or [],
+        "errors": auth_quality.get("errors") or [],
+        "login_success": bool(auth_quality.get("login_success")),
+        "auth_status": auth_quality.get("auth_status", ""),
     }
-    if quality.get("auth_status") in {"verification_required", "risk_control"}:
-        quality["verification_required"] = True
+    if auth_quality.get("screenshot_path"):
+        quality["screenshot_path"] = auth_quality.get("screenshot_path")
+    if auth_quality.get("missing_profile_session"):
+        quality["missing_profile_session"] = True
     return {
         "post": {},
         "post_owner": {},
@@ -175,14 +135,8 @@ def _merge_auth_quality(raw_data: dict[str, Any], auth_quality: dict[str, Any]) 
 
     merged["warnings"] = warnings
     merged["errors"] = errors
-    merged["login_checked"] = auth_quality.get("login_checked", False)
     merged["login_success"] = auth_quality.get("login_success", False)
     merged["auth_status"] = auth_quality.get("auth_status", "")
-    merged["auth_page_state"] = auth_quality.get("auth_page_state", "")
-    merged["auth_detection_method"] = auth_quality.get("auth_detection_method", "")
-    merged["auth_screenshot_path"] = auth_quality.get("auth_screenshot_path", "")
-    merged["auth_elapsed_seconds"] = auth_quality.get("auth_elapsed_seconds", 0)
-    merged["xhs_cookie_summary"] = auth_quality.get("xhs_cookie_summary") or {}
     if auth_quality.get("screenshot_path") and not merged.get("screenshot_path"):
         merged["screenshot_path"] = auth_quality.get("screenshot_path")
     raw_data["quality"] = merged
@@ -196,13 +150,29 @@ def _extract_with_intervention_wait(
     intervention_timeout: int,
 ) -> dict[str, Any]:
     """先采集一次；如遇登录/验证，截图提示用户并等待状态变化。"""
-    raw_data = extract_note_data(tab, comment_limit=comment_limit)
+    raw_data = extract_note_data(tab, comment_limit=comment_limit, status_callback=status_callback)
     quality = raw_data.get("quality") or {}
     if not _needs_user_intervention(quality):
         return raw_data
 
     _attach_intervention_screenshot(tab, raw_data, status_callback=status_callback)
     page_state = quality.get("page_state", "unknown")
+    collected_count = _collected_comment_count(quality)
+    if collected_count > 0:
+        quality.setdefault("warnings", []).append(
+            f"采集中触发小红书验证或安全状态，已停止继续操作并保存已采集的 {collected_count} 条评论"
+        )
+        raw_data["quality"] = quality
+        _emit(
+            status_callback,
+            "intervention_required",
+            message=f"采集中触发小红书验证，已停止继续滚动并保存已采集的 {collected_count} 条评论",
+            page_state=page_state,
+            screenshot_path=quality.get("screenshot_path", ""),
+            comment_count_collected=collected_count,
+        )
+        return raw_data
+
     _emit(
         status_callback,
         "intervention_required",
@@ -219,7 +189,7 @@ def _extract_with_intervention_wait(
     last_state = page_state
     while time.time() < deadline:
         time.sleep(5)
-        current = extract_note_data(tab, comment_limit=comment_limit)
+        current = extract_note_data(tab, comment_limit=comment_limit, status_callback=status_callback)
         current_quality = current.get("quality") or {}
         current_state = current_quality.get("page_state", "unknown")
         if current_state != last_state:
@@ -247,7 +217,7 @@ def _extract_with_intervention_wait(
 def _attach_intervention_screenshot(tab, raw_data: dict[str, Any], *, status_callback) -> None:
     """在登录或验证码状态下保存截图，并通知调用方。"""
     quality = raw_data.get("quality") or {}
-    if quality.get("auth_page_state") in {"missing_profile_session"}:
+    if quality.get("missing_profile_session"):
         return
     if not _needs_user_intervention(quality):
         return
@@ -272,10 +242,68 @@ def _attach_intervention_screenshot(tab, raw_data: dict[str, Any], *, status_cal
 def _needs_user_intervention(quality: dict[str, Any]) -> bool:
     """判断当前页面是否需要登录或处理验证码。"""
     return bool(
-        quality.get("login_required")
-        or quality.get("verification_required")
-        or quality.get("page_state") in {"login_or_verification", "risk_control"}
+        quality.get("page_state") in {"login_required", "verification_required", "login_or_verification", "risk_control"}
     )
+
+
+def _collected_comment_count(quality: dict[str, Any]) -> int:
+    """读取已采集评论数，异常值按 0 处理。"""
+    return _quality_int(quality, "comment_count_collected")
+
+
+def _quality_int(quality: dict[str, Any], key: str) -> int:
+    """读取 quality 里的整数，异常值按 0 处理。"""
+    try:
+        return int(quality.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _emit_collection_finished(callback, raw_data: dict[str, Any]) -> None:
+    """采集循环结束后先提示用户，避免保存和调试快照阶段显得无响应。"""
+    quality = raw_data.get("quality") or {}
+    comments = _collected_comment_count(quality)
+    level1_count = _quality_int(quality, "level1_comment_count_collected")
+    level2_count = _quality_int(quality, "level2_comment_count_collected")
+    status = quality.get("status", "")
+    page_state = quality.get("page_state", "")
+    _emit(
+        callback,
+        "collection_finished",
+        message=(
+            "评论采集结束，正在整理和保存数据\n"
+            f"评论数: {comments}，一级 {level1_count}，二级 {level2_count}\n"
+            f"状态: {status} / {page_state}"
+        ),
+        comment_count_collected=comments,
+        level1_comment_count_collected=level1_count,
+        level2_comment_count_collected=level2_count,
+        status=status,
+        page_state=page_state,
+    )
+
+
+def _build_completion_message(result: dict[str, Any]) -> str:
+    """构造可直接发给前端的最终完成消息。"""
+    quality = result.get("quality") or {}
+    post_id = result.get("post_id", "")
+    file_path = result.get("file_path", "")
+    comments = quality.get("comment_count_collected", 0)
+    status = quality.get("status", "")
+    page_state = quality.get("page_state", "")
+    auth_status = quality.get("auth_status", "")
+    warnings = quality.get("warnings") or []
+    message = (
+        "小红书数据采集完成\n\n"
+        f"post_id: {post_id}\n"
+        f"状态: {status} / {page_state}\n"
+        f"登录: {auth_status}\n"
+        f"评论数: {comments}\n"
+        f"文件: [FILE:{file_path}]"
+    )
+    if warnings:
+        message += "\n\n提示:\n" + "\n".join(f"- {item}" for item in warnings[:5])
+    return message
 
 
 def _emit(callback, event: str, **payload: Any) -> None:

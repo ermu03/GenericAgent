@@ -65,7 +65,7 @@ const loginSelectors = visibleMatches([
 ]);
 
 const riskControl = /ip at risk|error_code=300012|安全限制|访问太频繁|风险|异常访问/i.test(combined);
-const verificationRequired = /安全验证|拖动滑块|人机验证|请完成验证|verify|captcha|captcha/i.test(combined);
+const verificationRequired = /安全验证|请通过验证|拖动滑块|人机验证|请完成验证|扫码验证身份|验证身份|二维码\d*分钟失效|verify|captcha/i.test(combined);
 const loginRequired = /登录后|请登录|扫码登录|登录小红书|手机号登录|短信登录/.test(text + title) && loginSelectors.length > 0;
 
 let pageState = 'normal';
@@ -75,16 +75,11 @@ else if (verificationRequired) pageState = 'verification_required';
 else if (loginRequired) pageState = 'login_required';
 
 return {
-  url,
-  title,
   page_state: pageState,
   logged_in_by_dom: loggedSelectors.length > 0,
-  logged_selectors: loggedSelectors,
   login_required: loginRequired,
-  login_selectors: loginSelectors,
   verification_required: verificationRequired,
-  risk_control: riskControl,
-  text_preview: text.slice(0, 300)
+  risk_control: riskControl
 };
 """
 
@@ -98,51 +93,41 @@ def ensure_logged_in(
 
     登录状态由 Chromium profile 自己管理，采集流程只复用 profile。
     """
-    started_at = time.time()
     quality: dict[str, Any] = {
-        "login_checked": True,
         "login_success": False,
         "auth_status": "checking",
-        "auth_page_state": "unknown",
-        "auth_detection_method": "",
-        "auth_screenshot_path": "",
-        "xhs_cookie_summary": {},
-        "auth_attempts": [],
+        "page_state": "unknown",
         "warnings": [],
         "errors": [],
     }
 
     _emit(status_callback, "login_checking", message="正在检查小红书登录态")
     initial_cookie_summary = read_xhs_cookie_summary(tab)
-    quality["xhs_cookie_summary"] = initial_cookie_summary
-
     if not _has_session_cookie(initial_cookie_summary):
         quality["auth_status"] = "login_required"
-        quality["auth_page_state"] = "missing_profile_session"
-        quality["login_required"] = True
+        quality["page_state"] = "login_required"
+        quality["missing_profile_session"] = True
         quality.setdefault("warnings", []).append(f"当前浏览器 profile 未登录小红书: {BROWSER_PROFILE_DIR}")
         _emit(status_callback, "login_required", message="当前小红书浏览器 profile 未登录，请先在有界面浏览器中登录")
-        return _finish_quality(quality, started_at)
+        return quality
 
     status = _open_and_check(tab, LOGIN_CHECK_URL, quality)
     _apply_status_to_quality(quality, status)
-    _append_auth_attempt(quality, LOGIN_CHECK_URL, status)
 
     if _is_logged_in_status(status):
         _mark_logged_in(quality, status)
         _emit(status_callback, "login_success", message="小红书登录态有效")
-        return _finish_quality(quality, started_at)
+        return quality
 
     if _is_blocked_status(status):
         _mark_blocked(quality, status, tab, status_callback)
-        return _finish_quality(quality, started_at)
+        return quality
 
     quality["auth_status"] = "login_required"
-    quality["auth_page_state"] = status.get("page_state") or "login_required"
-    quality["login_required"] = True
+    quality["page_state"] = status.get("page_state") or "login_required"
     quality.setdefault("warnings", []).append(f"当前浏览器 profile 登录态无效或已过期: {BROWSER_PROFILE_DIR}")
     _emit(status_callback, "login_required", message="当前小红书浏览器 profile 登录态无效，请重新在有界面浏览器中登录")
-    return _finish_quality(quality, started_at)
+    return quality
 
 
 def check_login_status(tab) -> dict[str, Any]:
@@ -182,28 +167,10 @@ def check_login_status(tab) -> dict[str, Any]:
     elif login_required:
         auth_status = "login_required"
 
-    detection_method = ""
-    if logged_in_by_dom:
-        detection_method = "dom"
-    elif logged_in_by_cookie:
-        detection_method = "cookie"
-
     return {
         "auth_status": auth_status,
         "page_state": result.get("page_state") or auth_status,
-        "url": result.get("url") or getattr(tab, "url", ""),
-        "title": result.get("title") or "",
         "logged_in": logged_in,
-        "logged_in_by_dom": logged_in_by_dom,
-        "logged_in_by_cookie": logged_in_by_cookie,
-        "auth_detection_method": detection_method,
-        "login_required": login_required,
-        "verification_required": verification_required,
-        "risk_control": risk_control,
-        "logged_selectors": result.get("logged_selectors") or [],
-        "login_selectors": result.get("login_selectors") or [],
-        "text_preview": result.get("text_preview") or "",
-        "xhs_cookie_summary": cookie_summary,
         "errors": errors,
     }
 
@@ -250,24 +217,6 @@ def read_xhs_cookie_summary(tab) -> dict[str, Any]:
     }
 
 
-def _append_auth_attempt(quality: dict[str, Any], requested_url: str, status: dict[str, Any]) -> None:
-    """记录登录态验证页面的结果，便于定位风控或会话过期。"""
-    attempts = quality.setdefault("auth_attempts", [])
-    attempts.append(
-        {
-            "requested_url": requested_url,
-            "final_url": status.get("url", ""),
-            "auth_status": status.get("auth_status", ""),
-            "page_state": status.get("page_state", ""),
-            "title": status.get("title", ""),
-            "login_required": bool(status.get("login_required")),
-            "verification_required": bool(status.get("verification_required")),
-            "risk_control": bool(status.get("risk_control")),
-            "text_preview": status.get("text_preview", ""),
-        }
-    )
-
-
 def _open_and_check(tab, url: str, quality: dict[str, Any]) -> dict[str, Any]:
     """打开指定页面后读取登录状态。"""
     try:
@@ -285,13 +234,7 @@ def _open_and_check(tab, url: str, quality: dict[str, Any]) -> dict[str, Any]:
 def _apply_status_to_quality(quality: dict[str, Any], status: dict[str, Any]) -> None:
     """把本轮登录检测结果写入 quality。"""
     quality["auth_status"] = status.get("auth_status") or "unknown"
-    quality["auth_page_state"] = status.get("page_state") or "unknown"
-    quality["auth_detection_method"] = status.get("auth_detection_method") or quality.get("auth_detection_method", "")
-    quality["xhs_cookie_summary"] = status.get("xhs_cookie_summary") or {}
-    if status.get("login_required"):
-        quality["login_required"] = True
-    if status.get("verification_required"):
-        quality["verification_required"] = True
+    quality["page_state"] = status.get("page_state") or "unknown"
     for error in status.get("errors") or []:
         if error not in quality.setdefault("errors", []):
             quality["errors"].append(error)
@@ -313,17 +256,13 @@ def _has_session_cookie(cookie_summary: dict[str, Any]) -> bool:
 def _mark_logged_in(quality: dict[str, Any], status: dict[str, Any]) -> None:
     quality["auth_status"] = "logged_in"
     quality["login_success"] = True
-    quality["login_required"] = False
-    quality["verification_required"] = False
-    quality["auth_page_state"] = status.get("page_state") or "normal"
-    quality["auth_detection_method"] = status.get("auth_detection_method") or quality.get("auth_detection_method", "")
+    quality["page_state"] = status.get("page_state") or "normal"
 
 
 def _mark_blocked(quality: dict[str, Any], status: dict[str, Any], tab, status_callback) -> None:
     auth_status = status.get("auth_status") or "verification_required"
     quality["auth_status"] = auth_status
-    quality["auth_page_state"] = status.get("page_state") or auth_status
-    quality["verification_required"] = auth_status in {"verification_required", "risk_control"}
+    quality["page_state"] = status.get("page_state") or auth_status
     message = "小红书页面需要验证码或安全验证，已保存截图"
     if auth_status == "risk_control":
         message = "小红书页面触发安全限制，已保存截图"
@@ -341,7 +280,6 @@ def _save_auth_screenshot(tab, quality: dict[str, Any], status_callback, *, even
     """保存登录/验证截图，并把截图路径写入 quality。"""
     try:
         path = save_page_screenshot(tab, f"xhs_auth_{uuid.uuid4().hex[:8]}.png")
-        quality["auth_screenshot_path"] = path
         quality["screenshot_path"] = path
         if f"页面截图已保存: {path}" not in quality.setdefault("warnings", []):
             quality["warnings"].append(f"页面截图已保存: {path}")
@@ -349,11 +287,6 @@ def _save_auth_screenshot(tab, quality: dict[str, Any], status_callback, *, even
     except Exception as exc:
         quality.setdefault("warnings", []).append(f"登录/验证截图保存失败: {exc}")
         _emit(status_callback, event, message=message)
-
-
-def _finish_quality(quality: dict[str, Any], started_at: float) -> dict[str, Any]:
-    quality["auth_elapsed_seconds"] = round(time.time() - started_at, 2)
-    return quality
 
 
 def _cookie_attr(cookie: Any, name: str) -> str:

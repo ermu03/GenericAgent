@@ -71,6 +71,7 @@ Agent 应该完成后续流程：
 - 识别链接。
 - 获取该帖子的相关数据。
 - 告诉用户采集进度和结果。
+- 评论采集耗时较长时，持续返回阶段性进度、采集结束提示和最终保存结果。
 - 生成评论分析报告。
 - 如果报告较长，通过文件返回。
 
@@ -104,7 +105,6 @@ Agent 应该完成后续流程：
 ```json
 {
   "post": {
-    "platform": "xiaohongshu",
     "post_id": "",
     "url": "",
     "title": "",
@@ -147,10 +147,11 @@ Agent 应该完成后续流程：
   "comments": [
     {
       "comment_id": "",
-      "parent_comment_id": null,
+      "level": 1,
+      "root_comment_id": null,
+      "reply_comment_id": null,
       "owner_user_id": "",
       "owner_nickname": "",
-      "owner_profile_url": "",
       "text": "",
       "liked_count": 0,
       "reply_count": 0,
@@ -205,17 +206,16 @@ DrissionPage 可以在服务器上控制 Chromium 浏览器，支持 headless �
 大致思路：
 
 - 使用 DrissionPage 打开用户提供的小红书链接。
-- 使用 `python -m plugins.xhs_comment_analysis --login-profile` 打开固定浏览器 profile，人工登录小红书。
+- 使用 `.venv/bin/python plugins/xhs_comment_analysis/login_profile.py` 打开固定浏览器 profile，人工登录小红书。
 - 服务器采集流程直接复用这个浏览器 profile 中的登录态和本地状态。
 - 验证码、安全验证或风控状态只提示用户介入，不自动破解。
 - 从页面可见内容、DOM 或页面状态中提取帖子和评论数据。
 - 滚动评论区，逐步采集评论。
+- 评论采集阶段每新增约 100 条评论返回一次进度，采集结束后返回整理保存提示，保存完成后返回最终结果。
 - 将结果整理成标准 JSON，保存到 `data/xhs_data/raw/`。
 - 后续基于 JSON 生成报告或回答问题。
 
-登录态和浏览器本地状态保存在 `data/xhs_data/work/local_login_profile/`，并随项目 git 同步。输出 JSON 的 `quality` 会记录登录检测状态、截图路径和 cookie 字段摘要，但不会记录敏感 cookie 值。
-
-真实页面请求会额外保存调试快照到 `data/xhs_data/work/debug/`，用于观察页面状态对象、候选帖子字段、候选评论数组和 DOM 分布，后续根据这些中间结果修正字段提取逻辑。
+登录态和浏览器本地状态保存在 `data/xhs_data/work/local_login_profile/`，并随项目 git 同步。raw JSON 只保存帖子、作者、评论和评论作者；采集质量、来源和截图路径写入 `data/xhs_data/index.json`。
 
 ### 2. TMWebDriver
 

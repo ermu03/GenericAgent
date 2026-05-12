@@ -97,23 +97,31 @@ function noteIdFromUrl() {
   return '';
 }
 
-function normalizeComment(raw, parentId = null, level = 1) {
+function normalizeComment(raw, rootId = null, level = 1) {
   if (!raw || typeof raw !== 'object') return null;
   const user = raw.user_info || raw.userInfo || raw.user || raw.owner || {};
+  const targetComment = raw.target_comment || raw.targetComment || raw.reply_comment || raw.replyComment || {};
+  const targetUser = targetComment.user_info || targetComment.userInfo || targetComment.user || {};
   const interact = raw.interact_info || raw.interactInfo || {};
   const id = raw.comment_id || raw.commentId || raw.id || '';
-  const parent = raw.parent_comment_id || raw.parentCommentId || raw.parent_id || raw.parentId || parentId;
+  const rootCommentId = level === 1 ? null : rootId;
+  const directReplyId = level === 1 ? null : (
+    targetComment.comment_id || targetComment.commentId || targetComment.id ||
+    raw.reply_comment_id || raw.replyCommentId ||
+    raw.target_comment_id || raw.targetCommentId ||
+    raw.parent_comment_id || raw.parentCommentId ||
+    rootId
+  );
   const text = raw.content || raw.text || raw.desc || raw.note || '';
   if (!text && !id) return null;
   const userId = user.user_id || user.userId || user.id || raw.user_id || raw.userId || '';
-  const profileUrl = userId ? `https://www.xiaohongshu.com/user/profile/${userId}` : '';
   return {
     comment_id: id,
-    parent_comment_id: parent || null,
     level,
+    root_comment_id: rootCommentId || null,
+    reply_comment_id: directReplyId || null,
     owner_user_id: userId,
     owner_nickname: user.nickname || user.nick_name || user.name || raw.nickname || '',
-    owner_profile_url: profileUrl,
     text: text,
     liked_count: numberText(raw.like_count || raw.likeCount || raw.liked_count || raw.likedCount || interact.liked_count || interact.like_count),
     reply_count: numberText(raw.sub_comment_count || raw.subCommentCount || raw.reply_count || raw.replyCount),
@@ -121,8 +129,8 @@ function normalizeComment(raw, parentId = null, level = 1) {
     metadata: {
       source: 'state',
       ip_location: raw.ip_location || raw.ipLocation || '',
-      raw_keys: Object.keys(raw).slice(0, 60),
-      key: ''
+      reply_to_user_id: targetUser.user_id || targetUser.userId || targetUser.id || '',
+      reply_to_nickname: targetUser.nickname || targetUser.nick_name || targetUser.name || ''
     }
   };
 }
@@ -135,17 +143,14 @@ function normalizeCommentTree(items) {
     if (parent) out.push(parent);
     const children = raw.sub_comments || raw.subComments || raw.sub_comment_list || raw.subCommentList || raw.replies || raw.reply_list || [];
     if (Array.isArray(children)) {
-      const parentId = parent ? parent.comment_id : (raw.comment_id || raw.commentId || raw.id || null);
+      const rootId = parent ? parent.comment_id : (raw.comment_id || raw.commentId || raw.id || null);
       for (const child of children) {
-        const normalizedChild = normalizeComment(child, parentId, 2);
+        const normalizedChild = normalizeComment(child, rootId, 2);
         if (normalizedChild) out.push(normalizedChild);
       }
     }
   }
-  return out.map(c => {
-    c.metadata.key = commentKey(c);
-    return c;
-  });
+  return out;
 }
 
 function extractCommentsFromState(state) {
@@ -174,7 +179,7 @@ function normalizeNote(raw) {
       collected_count: numberText(interact.collected_count || interact.collectedCount || interact.collect_count || interact.collectCount),
       comment_count: numberText(interact.comment_count || interact.commentCount),
       shared_count: numberText(interact.share_count || interact.shareCount),
-      metadata: { raw_keys: Object.keys(raw).slice(0, 80) }
+      metadata: {}
     },
     post_owner: {
       user_id: user.user_id || user.userId || user.id || '',
@@ -183,7 +188,7 @@ function normalizeNote(raw) {
       bio: user.desc || user.description || '',
       location: user.ip_location || user.location || '',
       verified: user.red_official_verified || user.verified || null,
-      metadata: { avatar: user.avatar || user.image || '' }
+      metadata: {}
     }
   };
 }
@@ -192,24 +197,19 @@ function extractDomPost() {
   const titleEl = document.querySelector('#detail-title, .title, [class*=title]');
   const descEl = document.querySelector('#detail-desc, .desc, [class*=desc]');
   const authorEl = document.querySelector('.author .name, .user-name, [class*=author] [class*=name]');
-  const bodyText = safeText(document.body);
   return {
     post: {
       post_id: noteIdFromUrl(),
       title: safeText(titleEl),
       content: safeText(descEl),
       tags: uniq(Array.from(document.querySelectorAll('a, span')).map(e => safeText(e)).filter(t => t.startsWith('#')).map(t => t.replace(/^#/, ''))),
-      metadata: { body_preview: bodyText.slice(0, 500) }
+      metadata: {}
     },
     post_owner: {
       nickname: safeText(authorEl),
       metadata: {}
     }
   };
-}
-
-function commentKey(c) {
-  return [c.comment_id, c.owner_user_id, c.owner_nickname, c.text, c.created_at, c.parent_comment_id].join('|');
 }
 
 function looksLikeComment(el) {
@@ -244,25 +244,19 @@ function extractCommentsFromDom() {
     const isChild = Boolean(el.closest('[class*=reply], [class*=sub]')) || /reply|sub/.test(String(el.className || '').toLowerCase());
     comments.push({
       comment_id: attr(el, 'data-id') || attr(el, 'data-comment-id') || '',
-      parent_comment_id: isChild ? 'unknown_parent' : null,
       level: isChild ? 2 : 1,
+      root_comment_id: null,
+      reply_comment_id: null,
       owner_user_id: ownerId,
       owner_nickname: safeText(authorEl),
-      owner_profile_url: profileUrl,
       text: rawText,
       liked_count: numberText(safeText(el.querySelector('[class*=like], [class*=count]'))),
       reply_count: 0,
       created_at: '',
-      metadata: {
-        dom_class: String(el.className || '').slice(0, 200),
-        key: ''
-      }
+      metadata: {}
     });
   }
-  return comments.map(c => {
-    c.metadata.key = commentKey(c);
-    return c;
-  });
+  return comments;
 }
 
 function detectPageState() {
@@ -273,7 +267,7 @@ function detectPageState() {
   const hasLogin = /登录|扫码|手机号登录|短信登录|请先登录/.test(text + title);
   if (/404|not.?found/i.test(title + text)) return 'not_found';
   if (/ip at risk|error_code=300012|安全限制/i.test(combined)) return 'risk_control';
-  if (/安全验证|拖动滑块|人机验证|请完成验证|verify|captcha/i.test(combined)) return 'verification_required';
+  if (/安全验证|请通过验证|拖动滑块|人机验证|请完成验证|扫码验证身份|验证身份|二维码\d*分钟失效|verify|captcha/i.test(combined)) return 'verification_required';
   if (/登录|扫码登录|请先登录/.test(text + title)) return 'login_required';
   if (hasLogin) return 'login_or_verification';
   return 'normal';
@@ -283,7 +277,10 @@ const noteId = noteIdFromUrl();
 const state = pickInitialState();
 const note = normalizeNote(findNoteObject(state, noteId));
 const dom = extractDomPost();
-const comments = extractCommentsFromState(state).concat(extractCommentsFromDom());
+const stateComments = extractCommentsFromState(state);
+// state 对象里有结构化评论时，不再混入 DOM 兜底结果。
+// DOM 结果通常缺少 comment_id 和作者信息，混合后会把同一条评论重复保存。
+const comments = stateComments.length ? stateComments : extractCommentsFromDom();
 return {
   page_state: detectPageState(),
   state_found: Boolean(state),
@@ -299,37 +296,75 @@ return {
 
 
 EXPAND_REPLIES_JS = r"""
-const keywords = ['展开', '更多回复', '查看', '条回复'];
-let clicked = 0;
+const patterns = [
+  /展开.*回复/,
+  /查看.*回复/,
+  /更多回复/,
+  /还有.*回复/,
+  /共.*回复/,
+  /条回复/
+];
+const candidates = [];
+function visible(el) {
+  const rect = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+}
 for (const el of Array.from(document.querySelectorAll('button, span, div, a'))) {
   const text = (el.innerText || '').trim();
-  if (!text || text.length > 30) continue;
-  if (!keywords.some(k => text.includes(k))) continue;
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) continue;
+  if (!text || text.length > 40) continue;
+  if (!patterns.some(pattern => pattern.test(text))) continue;
+  if (!visible(el)) continue;
+  candidates.push({el, top: el.getBoundingClientRect().top});
+}
+candidates.sort((a, b) => a.top - b.top);
+let clicked = 0;
+for (const item of candidates) {
   try {
-    el.click();
+    item.el.scrollIntoView({block: 'center', inline: 'nearest'});
+    item.el.click();
     clicked++;
-    if (clicked >= 8) break;
+    if (clicked >= 3) break;
   } catch (_) {}
 }
-return clicked;
+return {
+  clicked,
+  candidates: candidates.length
+};
 """
 
 
 SCROLL_JS = r"""
+function safeText(el) {
+  return (el && el.innerText ? el.innerText : '').replace(/\s+/g, ' ').trim();
+}
+
+function scoreContainer(el) {
+  const text = safeText(el).slice(0, 3000);
+  const cls = String(el.className || '').toLowerCase();
+  let score = 0;
+  if (/comment|reply|评论|回复/.test(cls)) score += 2000;
+  if (/评论|回复|赞|IP属地/.test(text)) score += 1000;
+  score += Math.min(el.scrollHeight, 5000);
+  return score;
+}
+
 const containers = Array.from(document.querySelectorAll('div, main, section')).filter(el => {
   const style = getComputedStyle(el);
   return /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 50;
 });
-const target = containers.sort((a, b) => b.scrollHeight - a.scrollHeight)[0] || document.scrollingElement || document.documentElement;
+const target = containers.sort((a, b) => scoreContainer(b) - scoreContainer(a))[0] || document.scrollingElement || document.documentElement;
 const before = target.scrollTop;
-target.scrollTop = Math.min(target.scrollTop + 900, target.scrollHeight);
+const clientHeight = target.clientHeight || window.innerHeight || 900;
+const step = Math.max(420, Math.min(760, Math.floor(clientHeight * 0.55)));
+target.scrollTop = Math.min(target.scrollTop + step, target.scrollHeight);
 return {
   before,
   after: target.scrollTop,
   scrollHeight: target.scrollHeight,
-  clientHeight: target.clientHeight
+  clientHeight: target.clientHeight,
+  step,
+  moved: Math.abs(target.scrollTop - before) > 5
 };
 """
 
@@ -347,11 +382,12 @@ def _comment_key(comment: dict[str, Any]) -> str:
     """
     parts = [
         comment.get("comment_id"),
+        comment.get("root_comment_id"),
+        comment.get("reply_comment_id"),
         comment.get("owner_user_id"),
         comment.get("owner_nickname"),
         comment.get("text"),
         comment.get("created_at"),
-        comment.get("parent_comment_id"),
     ]
     return "|".join(_clean_text(p) for p in parts)
 
@@ -364,8 +400,6 @@ def _merge_comments(existing: dict[str, dict[str, Any]], comments: list[dict[str
             continue
         comment["text"] = text
         key = _comment_key(comment)
-        comment.setdefault("metadata", {})
-        comment["metadata"]["dedupe_key"] = key
         if key not in existing:
             existing[key] = comment
         if len(existing) >= limit:
@@ -378,7 +412,7 @@ def _build_comment_owners(comments: list[dict[str, Any]]) -> list[dict[str, Any]
     for comment in comments:
         owner_id = _clean_text(comment.get("owner_user_id"))
         nickname = _clean_text(comment.get("owner_nickname"))
-        profile_url = _clean_text(comment.get("owner_profile_url"))
+        profile_url = f"https://www.xiaohongshu.com/user/profile/{owner_id}" if owner_id else ""
         key = owner_id or profile_url or nickname
         if not key or key in owners:
             continue
@@ -401,13 +435,79 @@ def _build_comment_owners(comments: list[dict[str, Any]]) -> list[dict[str, Any]
 def _quality_status(page_state: str, comment_count: int) -> str:
     """根据页面状态和评论数判断采集状态。"""
     if page_state in {"login_required", "verification_required", "login_or_verification", "risk_control", "not_found"}:
+        if comment_count > 0 and page_state != "not_found":
+            return "partial_success"
         return "failed"
     if page_state != "normal" or comment_count == 0:
         return "partial_success"
     return "success"
 
 
-def extract_note_data(tab: Any, *, comment_limit: int = 600) -> dict[str, Any]:
+def _safe_int(value: Any) -> int:
+    """把页面里可能出现的数字字段稳定转换为 int。"""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _target_comment_count(declared_count: int, comment_limit: int) -> int:
+    """根据帖子评论数计算本次采集目标，最多不超过配置上限。"""
+    if declared_count <= 0:
+        return comment_limit
+    return max(1, min(declared_count, comment_limit))
+
+
+def _max_collect_rounds(target_count: int) -> int:
+    """评论越多，允许越多轮慢速加载。"""
+    if target_count <= 80:
+        return 35
+    if target_count <= 200:
+        return 60
+    if target_count <= 400:
+        return 90
+    return 120
+
+
+def _idle_round_limit(target_count: int) -> int:
+    """评论多时给页面更多轮机会，避免网络慢时过早停止。"""
+    if target_count <= 80:
+        return 6
+    if target_count <= 200:
+        return 8
+    return 10
+
+
+def _settle_seconds(round_no: int, no_growth_rounds: int, clicked_count: int) -> float:
+    """控制采集节奏，宁可慢一点，减少连续高频操作。"""
+    seconds = 1.8
+    if clicked_count:
+        seconds += 0.8
+    if no_growth_rounds:
+        seconds += min(no_growth_rounds * 0.4, 2.0)
+    if round_no and round_no % 12 == 0:
+        seconds += 2.0
+    return seconds
+
+
+def _has_more_comments(declared_count: int, collected_count: int, comment_limit: int) -> bool:
+    """判断达到停止条件时是否仍可能有未采集评论。"""
+    if declared_count > 0:
+        return collected_count < declared_count
+    return collected_count >= comment_limit
+
+
+def _emit_progress(callback, **payload: Any) -> None:
+    """向前端报告采集进度；回调失败不影响采集。"""
+    if not callback:
+        return
+    try:
+        callback("comment_progress", payload)
+    except Exception:
+        pass
+
+
+def extract_note_data(tab: Any, *, comment_limit: int = 800, status_callback=None) -> dict[str, Any]:
     """从 DrissionPage tab 中提取原始帖子数据。
 
     实现原则：
@@ -415,7 +515,6 @@ def extract_note_data(tab: Any, *, comment_limit: int = 600) -> dict[str, Any]:
     - 同时使用 DOM 启发式兜底，因为不同小红书页面入口结构会有差异。
     - 评论采用“滚动一段、采集一轮、合并去重”的方式，避免虚拟列表丢数据。
     """
-    started_at = time.time()
     warnings: list[str] = []
     errors: list[str] = []
     comments_by_key: dict[str, dict[str, Any]] = {}
@@ -423,6 +522,10 @@ def extract_note_data(tab: Any, *, comment_limit: int = 600) -> dict[str, Any]:
     post_owner: dict[str, Any] = {}
     page_state = "unknown"
     has_more_comments = None
+    target_count = comment_limit
+    max_rounds = _max_collect_rounds(target_count)
+    idle_limit = _idle_round_limit(target_count)
+    next_progress_threshold = 100
 
     try:
         tab.wait.doc_loaded(timeout=20)
@@ -431,7 +534,8 @@ def extract_note_data(tab: Any, *, comment_limit: int = 600) -> dict[str, Any]:
 
     # 多轮滚动采集。连续几轮没有新增评论后停止，避免无意义地滚动。
     no_growth_rounds = 0
-    for round_no in range(30):
+    round_no = 0
+    while round_no < max_rounds:
         try:
             result = tab.run_js(STATE_AND_DOM_JS, timeout=12)
         except Exception as exc:
@@ -443,45 +547,85 @@ def extract_note_data(tab: Any, *, comment_limit: int = 600) -> dict[str, Any]:
             note = result.get("note") or {}
             post.update(note.get("post") or {})
             post_owner.update(note.get("post_owner") or {})
+            declared_count = _safe_int(post.get("comment_count"))
+            if declared_count:
+                target_count = _target_comment_count(declared_count, comment_limit)
+                max_rounds = _max_collect_rounds(target_count)
+                idle_limit = _idle_round_limit(target_count)
             before_count = len(comments_by_key)
             _merge_comments(comments_by_key, result.get("comments") or [], comment_limit)
+            collected_count = len(comments_by_key)
             if len(comments_by_key) == before_count:
                 no_growth_rounds += 1
             else:
                 no_growth_rounds = 0
+            if collected_count >= next_progress_threshold:
+                level1_count = sum(1 for comment in comments_by_key.values() if int(comment.get("level") or 1) == 1)
+                level2_count = sum(1 for comment in comments_by_key.values() if int(comment.get("level") or 1) == 2)
+                _emit_progress(
+                    status_callback,
+                    message=f"正在采集评论: {collected_count}/{target_count}，一级 {level1_count}，二级 {level2_count}",
+                    collected_count=collected_count,
+                    target_count=target_count,
+                    level1_comment_count_collected=level1_count,
+                    level2_comment_count_collected=level2_count,
+                    round_no=round_no,
+                )
+                next_progress_threshold = (collected_count // 100 + 1) * 100
         else:
             warnings.append("页面提取脚本没有返回字典结果")
 
         if page_state in {"login_required", "verification_required", "login_or_verification", "risk_control", "not_found"}:
             break
-        if len(comments_by_key) >= comment_limit:
-            has_more_comments = True
+        if len(comments_by_key) >= target_count:
+            has_more_comments = _has_more_comments(_safe_int(post.get("comment_count")), len(comments_by_key), comment_limit)
             break
-        if no_growth_rounds >= 5 and round_no >= 5:
+        if no_growth_rounds >= idle_limit and round_no >= idle_limit:
             has_more_comments = False
             break
 
         # 展开二级评论后再滚动。点击失败不影响主流程。
+        clicked_count = 0
         try:
-            clicked = tab.run_js(EXPAND_REPLIES_JS, timeout=5)
-            if clicked:
-                time.sleep(0.8)
+            expand_result = tab.run_js(EXPAND_REPLIES_JS, timeout=5)
+            if isinstance(expand_result, dict):
+                clicked_count = _safe_int(expand_result.get("clicked"))
+            else:
+                clicked_count = _safe_int(expand_result)
+            if clicked_count:
+                time.sleep(1.2)
         except Exception:
             pass
 
         try:
             scroll_result = tab.run_js(SCROLL_JS, timeout=5)
-            if isinstance(scroll_result, dict) and scroll_result.get("after") == scroll_result.get("before"):
+            if isinstance(scroll_result, dict) and not scroll_result.get("moved"):
                 no_growth_rounds += 1
-            time.sleep(1.0)
+            time.sleep(_settle_seconds(round_no, no_growth_rounds, clicked_count))
         except Exception as exc:
             warnings.append(f"评论区滚动失败: {exc}")
             break
+        round_no += 1
 
     comments = list(comments_by_key.values())[:comment_limit]
     comment_owners = _build_comment_owners(comments)
     level1_count = sum(1 for comment in comments if int(comment.get("level") or 1) == 1)
     level2_count = sum(1 for comment in comments if int(comment.get("level") or 1) == 2)
+    declared_comment_count = _safe_int(post.get("comment_count"))
+    if page_state == "normal" and has_more_comments is None:
+        has_more_comments = _has_more_comments(declared_comment_count, len(comments), comment_limit)
+    if page_state in {"login_required", "verification_required", "login_or_verification", "risk_control"} and comments:
+        if declared_comment_count > 0:
+            has_more_comments = _has_more_comments(declared_comment_count, len(comments), comment_limit)
+        else:
+            has_more_comments = True
+        warnings.append(f"采集中页面进入 {page_state} 状态，已停止继续滚动并保存已采集的 {len(comments)} 条评论")
+    if page_state == "normal" and declared_comment_count > len(comments):
+        has_more_comments = True
+        warnings.append(f"页面显示评论总数 {declared_comment_count}，本次采集 {len(comments)} 条，仍有评论未采集")
+        if round_no >= max_rounds:
+            warnings.append(f"已达到本次慢速加载上限 {max_rounds} 轮，为降低风控风险停止继续滚动")
+
     missing_fields = []
     for field in ("post_id", "title", "content"):
         if not _clean_text(post.get(field)):
@@ -492,6 +636,10 @@ def extract_note_data(tab: Any, *, comment_limit: int = 600) -> dict[str, Any]:
     status = _quality_status(page_state, len(comments))
     if page_state == "risk_control":
         warnings.append("页面触发小红书安全限制，通常需要更换网络、登录态或人工验证后重试")
+    elif page_state == "verification_required":
+        warnings.append("页面要求扫码或验证码验证，已保存当前已采集数据")
+    elif page_state == "login_required":
+        warnings.append("页面要求重新登录，已保存当前已采集数据")
     elif page_state == "login_or_verification":
         warnings.append("页面需要登录或验证，已保存截图供用户处理")
     elif not comments:
@@ -504,18 +652,13 @@ def extract_note_data(tab: Any, *, comment_limit: int = 600) -> dict[str, Any]:
         "comment_owners": comment_owners,
         "quality": {
             "status": status,
+            "page_state": page_state,
             "comment_count_collected": len(comments),
             "level1_comment_count_collected": level1_count,
             "level2_comment_count_collected": level2_count,
-            "comment_limit": comment_limit,
-            "comment_owner_count_collected": len(comment_owners),
             "has_more_comments": has_more_comments,
             "missing_fields": missing_fields,
             "warnings": warnings,
             "errors": errors,
-            "login_required": page_state == "login_required",
-            "verification_required": page_state in {"verification_required", "login_or_verification", "risk_control"},
-            "page_state": page_state,
-            "elapsed_seconds": round(time.time() - started_at, 2),
         },
     }

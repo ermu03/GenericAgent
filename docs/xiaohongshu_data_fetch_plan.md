@@ -20,7 +20,7 @@
 
 ## 第一阶段决策
 
-- 评论采集尽可能多，但设置上限，最多采集 600 条评论。
+- 评论采集尽可能多，但设置上限，最多采集 800 条评论。
 - 帖子下的直接评论是一级评论；对一级评论的回复是二级评论。
 - 第一版需要采集二级评论，并保留评论之间的回复关系。
 - DrissionPage 从第一版开始使用 headless 模式。
@@ -64,6 +64,7 @@ plugins/xhs_comment_analysis/
   __init__.py
   browser.py
   login.py
+  login_profile.py
   extractor.py
   fetch.py
   schema.py
@@ -75,6 +76,7 @@ plugins/xhs_comment_analysis/
 
 - `browser.py`：封装 DrissionPage 浏览器启动、登录态复用、页面打开和基础页面状态判断。
 - `login.py`：检查浏览器 profile 登录态，识别登录、验证码和风控状态。
+- `login_profile.py`：在本地有界面环境打开固定 profile，用于人工登录或切换账号。
 - `extractor.py`：接收 DrissionPage 页面对象，提取帖子信息，滚动评论区，采集评论并去重。
 - `fetch.py`：编排完整数据获取流程，从 URL 到保存 JSON。
 - `schema.py`：把采集到的原始数据转换成标准 JSON 结构。
@@ -98,6 +100,9 @@ plugins/xhs_comment_analysis/
 - 提取小红书链接，支持电脑网页版链接和手机 App 分享短链。
 - 调用插件采集数据。
 - 将采集状态返回微信用户。
+- 评论采集过程中每新增约 100 条评论返回一次进度。
+- 评论采集循环结束后先返回“正在整理和保存数据”提示。
+- 保存完成后返回最终完成信息和 JSON 文件路径。
 - 采集成功时返回 JSON 文件路径。
 
 第一版可以先让 `/xhs` 只负责数据获取，不触发分析。
@@ -127,6 +132,7 @@ DrissionPage 负责控制 Chromium 打开页面并读取数据。
   -> 提取帖子基础数据
   -> 滚动评论区
   -> 分批提取评论数据
+  -> 返回阶段性进度和采集结束提示
   -> 去重
   -> 生成标准 JSON
   -> 保存文件
@@ -159,7 +165,7 @@ data/xhs_data/work/local_login_profile/
 
 如果某些字段无法稳定获取，允许为空，但需要写入数据质量信息。
 
-数据质量信息写入输出 JSON 顶层的 `quality` 字段。
+数据文件只保存帖子和评论本体。采集质量信息和来源信息写入 `data/xhs_data/index.json`，避免 raw JSON 混入运行管理字段。
 
 建议记录：
 
@@ -170,22 +176,11 @@ data/xhs_data/work/local_login_profile/
 - `comment_count_collected`：实际采集到的评论数。
 - `level1_comment_count_collected`：实际采集到的一级评论数。
 - `level2_comment_count_collected`：实际采集到的二级评论数。
-- `comment_limit`：本次采集评论数上限，第一版为 600。
-- `comment_owner_count_collected`：实际采集到的评论作者数。
 - `has_more_comments`：是否判断还有更多评论未采集。
-- `login_checked`：是否已经执行登录态检查。
 - `login_success`：登录态是否可用。
 - `auth_status`：登录流程状态，例如 `logged_in`、`login_required`、`verification_required`、`risk_control`。
-- `auth_detection_method`：登录态判断来源，例如 `dom` 或 `cookie`。
-- `login_required`：是否检测到需要登录。
-- `verification_required`：是否检测到验证码或安全验证。
 - `page_state`：页面状态，例如 `normal`、`login_required`、`verification_required`、`not_found`。
-- `elapsed_seconds`：本次采集耗时。
-- `auth_elapsed_seconds`：登录检查和等待耗时。
-- `screenshot_path` / `auth_screenshot_path`：登录、验证码或安全验证页面截图路径。
-- `xhs_cookie_summary`：小红书相关 cookie 的摘要，只记录字段名是否存在，不记录 cookie 值。
-- `auth_attempts`：登录态验证页面的尝试记录，用于排查登录态是否失效或被风控。
-- `debug_snapshot_paths`：真实页面数据分布调试快照路径，用于后续修正字段提取逻辑。
+- `screenshot_path`：登录、验证码或安全验证页面截图路径，只有需要排查时写入。
 
 ## 标准 JSON
 
@@ -196,52 +191,7 @@ data/xhs_data/work/local_login_profile/
   "post": {},
   "post_owner": {},
   "comments": [],
-  "comment_owners": [],
-  "quality": {},
-  "source": {}
-}
-```
-
-`quality` 记录采集质量：
-
-```json
-{
-  "status": "success",
-  "comment_count_collected": 0,
-  "level1_comment_count_collected": 0,
-  "level2_comment_count_collected": 0,
-  "comment_limit": 600,
-  "comment_owner_count_collected": 0,
-  "has_more_comments": null,
-  "missing_fields": [],
-  "warnings": [],
-  "errors": [],
-  "login_checked": false,
-  "login_success": false,
-  "auth_status": "",
-  "auth_page_state": "",
-  "auth_detection_method": "",
-  "login_required": false,
-  "verification_required": false,
-  "page_state": "normal",
-  "elapsed_seconds": 0,
-  "auth_elapsed_seconds": 0,
-  "screenshot_path": "",
-  "auth_screenshot_path": "",
-  "xhs_cookie_summary": {},
-  "auth_attempts": [],
-  "debug_snapshot_paths": []
-}
-```
-
-`source` 记录采集来源：
-
-```json
-{
-  "input_url": "",
-  "final_url": "",
-  "fetched_at": "",
-  "fetch_method": "drissionpage"
+  "comment_owners": []
 }
 ```
 
@@ -252,27 +202,15 @@ data/xhs_data/work/local_login_profile/
 文件名优先使用帖子 ID：
 
 ```text
-data/xhs_data/raw/xhs_note_<post_id>.json
+data/xhs_data/raw/<post_id>.json
 ```
 
-对应的记录 ID 为：
-
-```text
-xhs_note_<post_id>
-```
-
-后续用户可以把 `record_id` 发给 bot，让 bot 继续读取对应 JSON。
+后续用户可以把 `post_id` 发给 bot，让 bot 继续读取对应 JSON。
 
 如果暂时无法提取帖子 ID，使用 URL hash 作为兜底：
 
 ```text
-data/xhs_data/raw/xhs_note_url_<hash8>.json
-```
-
-对应的记录 ID 为：
-
-```text
-xhs_note_url_<hash8>
+data/xhs_data/raw/url_<hash8>.json
 ```
 
 保存文件时使用 UTF-8，JSON 缩进为 2，保留中文。
@@ -293,27 +231,32 @@ data/xhs_data/index.json
 {
   "items": [
     {
-      "record_id": "xhs_note_<post_id>",
       "post_id": "<post_id>",
       "title": "",
       "owner_nickname": "",
-      "file_path": "data/xhs_data/raw/xhs_note_<post_id>.json",
+      "file_path": "data/xhs_data/raw/<post_id>.json",
       "input_url": "",
       "final_url": "",
       "fetched_at": "",
+      "fetch_method": "drissionpage",
       "status": "",
       "page_state": "",
       "comment_count_collected": 0,
       "level1_comment_count_collected": 0,
-      "level2_comment_count_collected": 0
+      "level2_comment_count_collected": 0,
+      "has_more_comments": null,
+      "warnings": [],
+      "errors": [],
+      "login_success": false,
+      "auth_status": ""
     }
   ]
 }
 ```
 
-用户可以先问 bot 当前有哪些小红书帖子数据。bot 读取 `data/xhs_data/index.json` 后，把已有记录返回给用户。用户再把某个 `record_id` 发给 bot，bot 根据 `index.json` 找到对应 JSON 文件继续处理。
+用户可以先问 bot 当前有哪些小红书帖子数据。bot 读取 `data/xhs_data/index.json` 后，把已有记录返回给用户。用户再把某个 `post_id` 发给 bot，bot 根据 `index.json` 找到对应 JSON 文件继续处理。
 
-同一个帖子重复采集时，默认覆盖同一个 `data/xhs_data/raw/xhs_note_<post_id>.json` 文件，并刷新 `index.json` 中对应记录。不保留历史版本。
+同一个帖子重复采集时，默认覆盖同一个 `data/xhs_data/raw/<post_id>.json` 文件，并刷新 `index.json` 中对应记录。不保留历史版本。
 
 ## 登录和验证码
 
@@ -330,16 +273,15 @@ data/xhs_data/index.json
 
 当前登录方案：
 
-- 使用 `python -m plugins.xhs_comment_analysis --login-profile` 打开固定 profile，并在有界面浏览器中手动登录小红书。
+- 使用 `.venv/bin/python plugins/xhs_comment_analysis/login_profile.py` 打开固定 profile，并在有界面浏览器中手动登录小红书。
 - 登录态和浏览器本地状态保存在 `data/xhs_data/work/local_login_profile/`。
 - 登录信息随项目 git 同步，服务器采集流程直接复用同一个 profile。
 - 采集流程先检查浏览器 profile 是否已有 `web_session`。
 - 如果已有登录会话，再打开 `https://www.xiaohongshu.com/explore` 验证登录态。
 - DrissionPage 只负责复用 profile 打开页面和采集数据，不使用帖子/评论私有接口采集数据。
-- cookie 只作为诊断摘要写入 `quality.xhs_cookie_summary`，不把敏感 cookie 值写入输出 JSON。
-- 真实页面请求会保存调试快照到 `data/xhs_data/work/debug/`，用于观察页面状态对象、候选帖子字段、候选评论数组和 DOM 分布。
+- cookie 只用于登录态诊断，不把敏感 cookie 值写入输出 JSON。
 
-验证码、安全验证或风控仍然只提示用户介入，不自动破解。
+验证码、安全验证或风控仍然只提示用户介入，不自动破解。采集中途触发验证时，如果已经获取到部分评论，立即保存部分结果并停止继续滚动。
 
 ## 第一版完成标准
 

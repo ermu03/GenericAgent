@@ -628,9 +628,11 @@ def on_message(bot, msg):
         def _handle_xhs():
             try:
                 sent_screenshots = set()
+                completion_sent = False
 
                 def _xhs_status_callback(event, payload):
                     """接收采集插件的进度事件，必要时把截图提前发给用户。"""
+                    nonlocal completion_sent
                     message = (payload or {}).get('message', '')
                     visible_events = {
                         'queued',
@@ -639,13 +641,16 @@ def on_message(bot, msg):
                         'login_success',
                         'login_verification_required',
                         'page_opening',
+                        'comment_progress',
+                        'collection_finished',
                         'intervention_required',
                         'page_state_changed',
-                        'debug_snapshot_saved',
-                        'debug_snapshot_failed',
+                        'completed',
                     }
                     if message and event in visible_events:
                         _send_xhs_status(bot, uid, ctx, message)
+                        if event == 'completed':
+                            completion_sent = True
                     screenshot_path = (payload or {}).get('screenshot_path', '')
                     if screenshot_path and screenshot_path not in sent_screenshots:
                         sent_screenshots.add(screenshot_path)
@@ -655,13 +660,12 @@ def on_message(bot, msg):
                 result = fetch_xhs_note(
                     text,
                     headless=True,
-                    comment_limit=600,
+                    comment_limit=800,
                     status_callback=_xhs_status_callback,
                     intervention_timeout=240,
                 )
-                payload = result.get('payload') or {}
-                quality = payload.get('quality') or {}
-                record_id = result.get('record_id', '')
+                quality = result.get('quality') or {}
+                post_id = result.get('post_id', '')
                 file_path = result.get('file_path', '')
                 comments = quality.get('comment_count_collected', 0)
                 status = quality.get('status', '')
@@ -670,7 +674,7 @@ def on_message(bot, msg):
                 warnings = quality.get('warnings') or []
                 reply = (
                     '小红书数据采集完成\n\n'
-                    f'record_id: {record_id}\n'
+                    f'post_id: {post_id}\n'
                     f'状态: {status} / {page_state}\n'
                     f'登录: {auth_status}\n'
                     f'评论数: {comments}\n'
@@ -678,7 +682,8 @@ def on_message(bot, msg):
                 )
                 if warnings:
                     reply += '\n\n提示:\n' + '\n'.join(f'- {w}' for w in warnings[:5])
-                _send_xhs_status(bot, uid, ctx, reply)
+                if not completion_sent:
+                    _send_xhs_status(bot, uid, ctx, reply)
                 _send_xhs_file(bot, uid, ctx, file_path)
 
                 screenshot_path = quality.get('screenshot_path', '')
