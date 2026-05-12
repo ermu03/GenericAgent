@@ -801,11 +801,9 @@ def _msgs_claude2oai(messages):
                 m["reasoning_content"] = reasoning
             if text_parts:
                 m["content"] = text_parts
-            else:
-                m["content"] = ""
             if tool_calls:
                 m["tool_calls"] = tool_calls
-            if not text_parts and not tool_calls and reasoning:
+            elif not text_parts:
                 m["content"] = "."
             result.append(m)
         elif role == "user":
@@ -955,7 +953,7 @@ class BaseSession:
                         "arguments": block.get("input", {}),
                     }
                     yield f"<tool_use>{json.dumps(tu, ensure_ascii=False)}</tool_use>"
-            if not content.startswith("!!!Error:"):
+            if content.strip() and not content.startswith("!!!Error:"):
                 self.history.append(
                     {
                         "role": "assistant",
@@ -968,7 +966,6 @@ class BaseSession:
 
 def _keep_claude_block(b):
     return not isinstance(b, dict) or b.get("type") != "thinking" or b.get("signature")
-
 
 def _drop_unsigned_thinking(messages):
     for m in messages:
@@ -1001,6 +998,7 @@ def _ensure_thinking_blocks(messages, model):
 
 class ClaudeSession(BaseSession):
     def raw_ask(self, messages):
+        messages = _fix_messages(messages)
         if self.max_tokens is None:
             self.max_tokens = 8192
         headers = {
@@ -1051,7 +1049,7 @@ class LLMSession(BaseSession):
         return (yield from _openai_stream(self, messages))
 
     def make_messages(self, raw_list):
-        return _msgs_claude2oai(raw_list)
+        return _msgs_claude2oai(_fix_messages(raw_list))
 
 
 def _fix_messages(messages):
@@ -1749,17 +1747,28 @@ class NativeToolClient:
                     {"type": "tool_result", "tool_use_id": tid, "content": ""}
                 )
         self._pending_tool_ids = []
-        # 合成一个新的 user 消息
-        merged = {"role": "user", "content": tool_result_blocks + combined_content}
-        # 写 LLM 日志
-        # 把发给模型的内容写到 GenericAgent/temp/model_responses/
+
+        # 严格 API 代理会拒绝纯空白 text block；非 text block 不能误删。
+        filtered_content = []
+        for block in combined_content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and not block.get("text", "").strip()
+            ):
+                continue
+            filtered_content.append(block)
+
+        final_content = tool_result_blocks + filtered_content
+        if not final_content:
+            final_content = [{"type": "text", "text": "."}]
+
+        merged = {"role": "user", "content": final_content}
         _write_llm_log(
             "Prompt",
             json.dumps(merged, ensure_ascii=False, indent=2),
             self.log_path,
         )
-        
-        # 调用底层 backend.ask
         gen = self.backend.ask(merged)
         try:
             while True:

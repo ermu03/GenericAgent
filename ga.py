@@ -77,6 +77,7 @@ def code_run(code, code_type="python", timeout=60, cwd=None, code_cwd=None, stop
             bufsize=0,
             cwd=cwd,
             startupinfo=startupinfo,
+            creationflags=0x08000000 if os.name == 'nt' else 0,
         )
         start_t = time.time()
         t = threading.Thread(target=stream_reader, args=(process, full_stdout), daemon=True)
@@ -649,6 +650,11 @@ class GenericAgentHandler(BaseHandler):
         # next_prompt += '\n[SYSTEM TIPS] 此函数一般在任务开始或中间时调用，如果任务已成功完成应该是start_long_term_update用于结算长期记忆。\n'
         return StepOutcome({"result": "working key_info updated"}, next_prompt=next_prompt)
 
+    def _retry_or_exit(self, prompt):
+        self._empty_ct = getattr(self, '_empty_ct', 0) + 1
+        if self._empty_ct >= 3: return StepOutcome({}, should_exit=True)
+        return StepOutcome({}, next_prompt=prompt)
+
     def do_no_tool(self, args, response):
         '''这是一个特殊工具，由引擎自主调用，不要包含在TOOLS_SCHEMA里。
         当模型在一轮中未显式调用任何工具时，由引擎自动触发。
@@ -656,16 +662,13 @@ class GenericAgentHandler(BaseHandler):
         content = getattr(response, 'content', '') or ""
         thinking = getattr(response, 'thinking', '') or ""
         if not response or (not content.strip() and not thinking.strip()):
-            self._empty_ct = getattr(self, '_empty_ct', 0) + 1
-            if self._empty_ct >= 3:
-                return StepOutcome({}, should_exit=True)
             yield "[Warn] LLM returned an empty response. Retrying...\n"
-            return StepOutcome({}, next_prompt="[System] Blank response, regenerate and tooluse")
+            return self._retry_or_exit("[System] Blank response, regenerate and tooluse")
 
-        if len(content) > 50 and ('[!!! 流异常中断' in content[-100:] or '!!!Error:' in content[-100:]):
-            return StepOutcome({}, next_prompt="[System] Incomplete response. Regenerate and tooluse.")
+        if '[!!! 流异常中断' in content[-100:] or '!!!Error:' in content[-100:]:
+            return self._retry_or_exit("[System] Incomplete response. Regenerate and tooluse.")
         if 'max_tokens !!!]' in content[-100:]:
-            return StepOutcome({}, next_prompt="[System] max_tokens limit reached. Use multi small steps to do it.")
+            return self._retry_or_exit("[System] max_tokens limit reached. Use multi small steps to do it.")
 
         if self._in_plan_mode() and any(kw in content for kw in ['任务完成', '全部完成', '已完成所有', '🏁']):
             if 'VERDICT' not in content and '[VERIFY]' not in content and '验证subagent' not in content:
@@ -790,8 +793,7 @@ class GenericAgentHandler(BaseHandler):
             summary = f"调用工具{tool_name}, args: {clean_args}"
             if tool_name == 'no_tool':
                 summary = "直接回答了用户问题"
-            next_prompt += "\n\n\nUSER: <summary>呢？？？！\n\n"
-
+            next_prompt += "\n\n\n[SYSTEM] 必须在回复文本中包含<summary>！\n\n"
         summary = smart_format(summary.replace('\n', ''), max_str_len=80)
         self.history_info.append(f'[Agent] {summary}')
         _plan = self._in_plan_mode()
